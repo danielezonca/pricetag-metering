@@ -58,7 +58,6 @@ h2 .filter-tag{font-size:12px;color:var(--blue);background:rgba(88,166,255,.15);
 .four-col #user-legend{height:114px}
 .four-col #savings-legend{height:114px;grid-template-rows:repeat(2,18px)}
 .four-col #model-legend{height:114px;grid-template-rows:repeat(5,18px)}
-.four-col #tool-legend{height:114px;row-gap:0}
 .four-col .pie-legend-item{display:flex;align-items:flex-start;gap:7px;min-width:0;height:18px}
 .four-col .pie-legend-swatch{width:16px;height:16px;flex:0 0 16px;margin-top:1px}
 .four-col .pie-legend-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -334,7 +333,7 @@ tr.clickable{cursor:pointer}
   <div class="chart-box">
     <h2>By Tool (<span id="tool-metric-label">Tokens</span>)</h2>
     <canvas id="tool-chart" width="220" height="220"></canvas>
-    <div id="tool-legend" class="pie-legend single-col"></div>
+    <div id="tool-legend" class="pie-legend"></div>
     <div class="tl-toggle" id="tool-metric-toggle">
       <button data-tm="tokens" class="active">Tokens</button>
       <button data-tm="requests">Requests</button>
@@ -1049,7 +1048,7 @@ function renderToolChart(){
   const value=d=>metric==='users'?(d.users||0):metric==='requests'?(d.requests||0):(d.total_tokens||0);
   const unit=metric==='users'?' users':metric==='requests'?' requests':' tokens';
   const existingOther=toolRows.filter(d=>d.tool==='Other').reduce((sum,d)=>sum+value(d),0);
-  const data=topFiveItems(toolRows.filter(d=>d.tool!=='Other'&&value(d)>0),value,function(d){return d.tool;},5);
+  const data=topFiveItems(toolRows.filter(d=>d.tool!=='Other'&&value(d)>0),value,function(d){return d.tool;},11);
   var otherItem=data.length&&data[data.length-1].label==='Other'?data.pop():{item:null,label:'Other',value:0};
   otherItem.value+=existingOther;
   if(otherItem.value>0)data.push(otherItem);
