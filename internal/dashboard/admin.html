@@ -52,6 +52,9 @@ body{background:var(--bg);color:var(--t);font-family:Inter,-apple-system,BlinkMa
   letter-spacing:.3px;cursor:pointer;font-family:inherit;transition:color .15s;
   display:inline-flex;align-items:center;gap:7px;
 }
+/*MODE:standalone*/
+.vtab[hidden]{display:none}
+/*MODE:end*/
 .vtab:hover{color:var(--t)}
 .vtab.on{color:var(--blu);border-bottom-color:var(--blu)}
 .tcount{
@@ -550,7 +553,12 @@ td .tag{white-space:nowrap}
     <a href="/account?tab=keys">API keys</a>
     <a href="/dashboard">Org usage</a>
     <a href="/manager" id="team-tab" style="display:none" title="Usage for everyone on your team">My team</a>
+<!--MODE:cluster-->
     <a href="/routing">Routing</a>
+<!--MODE:end-->
+<!--MODE:standalone-->
+    <a href="/routing" id="legacy-routing">Routing</a>
+<!--MODE:end-->
     <a href="/admin" class="on">Admin</a>
   </nav>
   <div class="ab-right">
@@ -564,7 +572,12 @@ td .tag{white-space:nowrap}
 
 <!-- Console tabs -->
 <div class="vtabs">
+<!--MODE:cluster-->
   <button class="vtab" id="vtab-people" onclick="showTab('people')">Users<span class="tcount" id="badge-people" style="display:none"></span></button><button class="vtab" id="vtab-model-access" onclick="showTab('model-access')">Model access</button><button class="vtab" id="vtab-over-limit" onclick="showTab('over-limit')">Over limit<span class="tcount" id="badge-over-limit" style="display:none"></span></button><button class="vtab" id="vtab-safety-net" onclick="showTab('safety-net')">Safety Net</button><button class="vtab" id="vtab-dashboard-policies" onclick="showTab('dashboard-policies')">Dashboard policies</button><button class="vtab" id="vtab-pricing-discounts" onclick="showTab('pricing-discounts')">Pricing Discounts</button><button class="vtab" id="vtab-model-restrictions" onclick="showTab('model-restrictions')">Legacy restrictions</button>
+<!--MODE:end-->
+<!--MODE:standalone-->
+  <button class="vtab" id="vtab-people" onclick="showTab('people')">Users<span class="tcount" id="badge-people" style="display:none"></span></button><button class="vtab" id="vtab-user-keys" data-managed hidden onclick="showTab('user-keys')">User keys</button><button class="vtab" id="vtab-model-access" onclick="showTab('model-access')">Model access</button><button class="vtab" id="vtab-over-limit" onclick="showTab('over-limit')">Over limit<span class="tcount" id="badge-over-limit" style="display:none"></span></button><button class="vtab" id="vtab-safety-net" onclick="showTab('safety-net')">Safety Net</button><button class="vtab" id="vtab-dashboard-policies" onclick="showTab('dashboard-policies')">Dashboard policies</button><button class="vtab" id="vtab-user-quota" data-managed hidden onclick="showTab('user-quota')">User quota</button><button class="vtab" id="vtab-model-pricing" data-managed hidden onclick="showTab('model-pricing')">Model pricing</button><button class="vtab" id="vtab-pricing-discounts" onclick="showTab('pricing-discounts')">Pricing Discounts</button><button class="vtab" id="vtab-model-restrictions" onclick="showTab('model-restrictions')">Legacy restrictions</button>
+<!--MODE:end-->
   <div class="vtab-tools">
     <span id="last-updated"></span>
     <button class="btn btn-outline" style="padding:5px 12px;font-size:10px" onclick="refreshTab(activeTab,true)">Refresh</button>
@@ -572,6 +585,13 @@ td .tag{white-space:nowrap}
 </div>
 
 <!-- ============ TAB: Keys ============ -->
+<!--MODE:standalone-->
+<!-- Cluster/OpenShift-only feature, kept unreachable on purpose: nothing in
+     standalone mode serves /api/v1/admin/users, /api/v1/admin/keys/invites,
+     /api/v1/admin/groups, or /api/v1/admin/subscriptions, and this panel is
+     absent from the TABS list so showTab can never display it. Re-enabling
+     it requires wiring those endpoints to standalone storage first. -->
+<!--MODE:end-->
 <div class="tab-panel" id="tab-keys">
 
   <div class="card">
@@ -621,19 +641,41 @@ td .tag{white-space:nowrap}
 <!-- ============ TAB: Users ============ -->
 <div class="tab-panel" id="tab-people">
 <div class="card">
+<!--MODE:cluster-->
   <div class="card-hdr"><div><span class="card-title">Partner / Atlas Users</span><span class="card-count" id="partner-users-count"></span></div><button class="btn btn-outline" style="padding:5px 12px;font-size:10px" onclick="loadPartnerUsers()">Refresh</button></div>
   <div class="ts" style="margin-bottom:10px">Partner identity records — the single source of truth for user management. Role changes are restricted to super-admins.</div>
+<!--MODE:end-->
+<!--MODE:standalone-->
+<!-- MANAGED_USERS -->
+  <div class="card-hdr"><div><span class="card-title">Users</span><span class="card-count" id="partner-users-count"></span></div><button class="btn btn-outline" style="padding:5px 12px;font-size:10px" onclick="loadPartnerUsers()">Refresh</button></div>
+  <div class="ts" style="margin-bottom:10px">Select a user for details and active keys. Edit uses the existing login; role and manager changes require a super-admin.</div>
+<!--MODE:end-->
   <div class="partner-users-toolbar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+<!--MODE:cluster-->
     <input type="search" id="partner-users-search" class="tbl-input" placeholder="Search name, email, or user ID" oninput="onPartnerUsersSearch()" style="flex:1;min-width:220px;padding:7px 10px;font-size:12px">
+<!--MODE:end-->
+<!--MODE:standalone-->
+    <input type="search" id="partner-users-search" class="tbl-input" placeholder="Search login, name, email, or user ID" oninput="onPartnerUsersSearch()" style="flex:1;min-width:220px;padding:7px 10px;font-size:12px">
+    <label style="font-size:11px;color:var(--t2);display:flex;align-items:center;gap:6px">Status <select class="tbl-input" style="width:auto;padding:6px 10px" id="partner-users-state" onchange="loadPartnerUsers(0)"><option value="all">All users</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+<!--MODE:end-->
     <label style="font-size:11px;color:var(--t2);display:flex;align-items:center;gap:6px">Per page
       <select id="partner-users-page-size" onchange="onPartnerUsersPageSize()" style="background:var(--c2);color:var(--t);border:1px solid var(--bdr);padding:6px 10px;border-radius:5px;font-size:12px;font-family:inherit;cursor:pointer;outline:none">
+<!--MODE:cluster-->
         <option value="20">20</option>
         <option value="50" selected>50</option>
+<!--MODE:end-->
+<!--MODE:standalone-->
+        <option value="5" selected>5</option><option value="20">20</option>
+        <option value="50">50</option>
+<!--MODE:end-->
         <option value="100">100</option>
         <option value="200">200</option>
       </select>
     </label>
   </div>
+<!--MODE:standalone-->
+
+<!--MODE:end-->
   <div id="partner-users-list"><div class="loading"><div class="spinner"></div>Loading partner users...</div></div>
   <div class="partner-users-pager"><button id="partner-users-prev" onclick="changePartnerUsersPage(-1)">Previous</button><span id="partner-users-page-label">Page 1</span><button id="partner-users-next" onclick="changePartnerUsersPage(1)">Next</button></div>
   </div>
@@ -646,6 +688,12 @@ td .tag{white-space:nowrap}
   </section>
 </div>
 
+<!--MODE:standalone-->
+<div class="tab-panel" id="tab-user-quota"><div class="card"><!-- MANAGED_BUDGETS --></div></div>
+<div class="tab-panel" id="tab-model-pricing"><div class="card"><!-- MANAGED_PRICES --></div></div>
+<div class="tab-panel" id="tab-user-keys"><div class="card"><!-- MANAGED_KEYS --></div></div>
+<p role="status" id="status" hidden></p>
+<!--MODE:end-->
 
 
 </div>
@@ -688,7 +736,12 @@ td .tag{white-space:nowrap}
       <button class="btn btn-outline" style="padding:5px 12px;font-size:10px" onclick="loadOverLimit()">Refresh</button>
     </div>
     <div class="ts" id="ol-note" style="margin-bottom:12px">People at or above their effective monthly budget. Budgets are additive across roles; temporary credits add on top. Free and zero-cost models stay available after the cap; paid requests return 429 while enforcement is on.</div>
+<!--MODE:cluster-->
     <div style="margin-bottom:10px"><input id="ol-search" class="tbl-input" placeholder="Search name, email, cost center, or username" oninput="loadOverLimit()" style="width:100%;padding:7px 10px;font-size:12px"></div>
+<!--MODE:end-->
+<!--MODE:standalone-->
+    <div style="margin-bottom:10px"><input id="ol-search" class="tbl-input" placeholder="Search name, email, cost center, or username" oninput="loadOverLimit(0)" style="width:100%;padding:7px 10px;font-size:12px"></div>
+<!--MODE:end-->
     <div id="ol-list"><div class="loading"><div class="spinner"></div>Loading over-limit users...</div></div>
     <div class="partner-users-pager"><button id="ol-prev" onclick="changeOverLimitPage(-1)">Previous</button><span id="ol-page-label">Page 1</span><button id="ol-next" onclick="changeOverLimitPage(1)">Next</button></div>
   </div>
@@ -872,6 +925,9 @@ td .tag{white-space:nowrap}
   <div class="card">
     <div class="card-hdr"><div><span class="card-title">Commercial Pricing Discounts</span><span class="card-count" id="pricing-discounts-meta"></span></div><button class="btn btn-outline" style="padding:5px 12px;font-size:10px" onclick="loadPricingDiscounts()">Refresh</button></div>
     <div class="ts" style="margin-bottom:14px">Super-admin-only effective-rate policy. Vendor list prices remain unchanged. Changes are audited and apply on the next pricing refresh or Metering restart.</div>
+<!--MODE:standalone-->
+
+<!--MODE:end-->
     <div id="pricing-discounts-body"><div class="loading"><div class="spinner"></div>Loading pricing policy...</div></div>
   </div>
 </div>
@@ -969,10 +1025,14 @@ td .tag{white-space:nowrap}
 
     <div id="addUserSuccess" style="display:none">
       <div class="ts" id="addUserAddedMsg" style="margin-bottom:12px"></div>
+<!--MODE:cluster-->
       <div class="ts">To send their gateway-key invite, press <strong>Invite</strong> on their new row.</div>
+<!--MODE:end-->
       <div class="modal-actions" style="margin-top:16px">
         <button class="btn btn-outline" onclick="closeAddUserModal()" style="padding:7px 18px;font-size:11px">Done</button>
+<!--MODE:cluster-->
         <button class="btn btn-grn" id="addUserInviteBtn" style="padding:7px 18px;font-size:11px">Send key invite now</button>
+<!--MODE:end-->
       </div>
     </div>
   </div>
@@ -1075,10 +1135,20 @@ function resolveModelName(crdName) {
 /* ================================================================
    Tabs — one panel visible, lazy load on first open, deep-linkable
    ================================================================ */
+//MODE:cluster
 var TABS = ['people', 'model-access', 'over-limit', 'safety-net', 'dashboard-policies', 'pricing-discounts', 'model-restrictions'];
+//MODE:end
+//MODE:standalone
+var TABS = ['people', 'user-keys', 'model-access', 'over-limit', 'safety-net', 'dashboard-policies', 'user-quota', 'model-pricing', 'pricing-discounts', 'model-restrictions'];
+//MODE:end
 
 function showTab(name, pushHash) {
+//MODE:cluster
   if (TABS.indexOf(name) < 0) name = 'people';
+//MODE:end
+//MODE:standalone
+  if (TABS.indexOf(name) < 0 || document.getElementById('vtab-' + name)?.hidden) name = 'people';
+//MODE:end
   activeTab = name;
   for (var i = 0; i < TABS.length; i++) {
     var t = TABS[i];
@@ -1101,6 +1171,14 @@ function refreshTab(name, manual) {
     loadModelAccess();
   } else if (name === 'over-limit') {
     loadOverLimit();
+//MODE:standalone
+  } else if (name === 'model-pricing' && window.refreshManagedPrices) {
+    window.refreshManagedPrices();
+  } else if (name === 'user-quota' && window.refreshManagedBudgets) {
+    window.refreshManagedBudgets();
+  } else if (name === 'user-keys' && window.refreshManagedUsers) {
+    window.refreshManagedUsers();
+//MODE:end
   } else if (name === 'safety-net') {
     loadSafetyNet();
   } else if (name === 'dashboard-policies') {
@@ -1216,7 +1294,27 @@ function setTabBadge(tab, n, alert) {
 /* ================================================================
    Model access
    ================================================================ */
+//MODE:cluster
 var maRoles = [], maRole = null, maSubjects = [], maCatalog = [], maEffectiveSubject = null;
+//MODE:end
+//MODE:standalone
+var maRoles = [], maRole = null, maSubjects = [], maCatalog = [], maEffectiveSubject = null, maEffectiveGeneration = 0, maCreditsGeneration = 0, maCreditSubmitting = false, maCreditRequests = loadCreditRequests(), maSubjectsGeneration = 0;
+// Retry-safety across reloads: pending credit request IDs live in
+// sessionStorage (per-origin, so per-deployment, and per browser session,
+// which also scopes per operator). A failed credit POST may have committed
+// server-side; a reload must not drop its ID and risk doubling the credit.
+function persistCreditRequests() {
+  try { sessionStorage.setItem('ma-credit-requests-v1', JSON.stringify(Array.from(maCreditRequests.entries()))); } catch (e) {}
+}
+function loadCreditRequests() {
+  var map = new Map();
+  try {
+    var raw = sessionStorage.getItem('ma-credit-requests-v1');
+    if (raw) JSON.parse(raw).forEach(function(e) { map.set(e[0], e[1]); });
+  } catch (e) {}
+  return map;
+}
+//MODE:end
 var maHighlightRoleID = null;
 var maNewModels = [], maRoleModels = [], maPickerTarget = null, maPickerSelection = new Set();
 
@@ -1235,6 +1333,29 @@ function sendJSON(url, method, body) {
     return r.json();
   });
 }
+//MODE:standalone
+// sendJSON discards the HTTP status on errors; the wizard's recovery
+// needs it to tell an ambiguous failure (no response, or a 5xx that can
+// commit before failing) from a definitive 4xx rejection that provably
+// created nothing.
+function sendJSONStatus(url, method, body) {
+  return fetch(url, {
+    method: method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  }).then(function(r) {
+    if (!r.ok) {
+      return r.text().then(function(t) {
+        var err = new Error(t.trim() || (r.status + ' ' + r.statusText));
+        err.status = r.status;
+        throw err;
+      });
+    }
+    if (r.status === 204) return null;
+    return r.json();
+  });
+}
+//MODE:end
 
 function splitModels(value) {
   return String(value || '').split(/[\n,]+/).map(function(s) { return s.trim(); }).filter(Boolean);
@@ -1347,7 +1468,12 @@ function renderModelPicker() {
       groups[provider].map(function(m) {
         return '<label style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;font-size:12px;cursor:pointer">' +
           '<input type="checkbox" style="width:auto;margin-top:2px" ' + (maPickerSelection.has(m.id) ? 'checked' : '') +
+//MODE:cluster
           ' onchange="toggleModelPicker(\'' + esc(m.id).replace(/'/g, "\\'") + '\',this.checked)">' +
+//MODE:end
+//MODE:standalone
+          ' onchange="toggleModelPicker(\'' + jsq(m.id) + '\',this.checked)">' +
+//MODE:end
           '<span><strong>' + esc(m.id) + '</strong>' + (m.display_name ? ' <span class="ts">— ' + esc(m.display_name) + '</span>' : '') +
           (m.zero_cost ? ' <span class="badge badge-grn" style="font-size:9px">free</span>' : '') +
           (m.dialects && m.dialects.length ? ' <span class="badge badge-blu" style="font-size:9px">' + esc(m.dialects.join(', ')) + '</span>' : '') +
@@ -1407,7 +1533,12 @@ function renderModelAccessRoles() {
     var sample = models.slice(0, 4).join(', ') + (models.length > 4 ? '…' : '');
     var retire = r.is_default
       ? '<button class="btn btn-outline" style="padding:4px 10px;font-size:10px" disabled title="Replace the default role before retiring it">Retire</button>'
+//MODE:cluster
       : '<button class="btn btn-outline" style="padding:4px 10px;font-size:10px;color:#ff6b6b" onclick="retireModelAccessRole(\'' + esc(r.role_id) + '\')">Retire</button>';
+//MODE:end
+//MODE:standalone
+      : '<button class="btn btn-outline" style="padding:4px 10px;font-size:10px;color:#ff6b6b" onclick="retireModelAccessRole(\'' + jsq(r.role_id) + '\')">Retire</button>';
+//MODE:end
     return '<tr' + (r.role_id === maHighlightRoleID ? ' style="background:var(--c2)"' : '') + '>' +
       '<td><strong>' + esc(r.name) + '</strong>' + (r.is_default ? ' <span class="badge badge-grn">default</span>' : '') + '</td>' +
       '<td>' + models.length + '</td>' +
@@ -1415,7 +1546,12 @@ function renderModelAccessRoles() {
       '<td>' + (r.subject_count || 0).toLocaleString('en-US') + '</td>' +
       '<td class="ts" title="' + esc(models.join(', ')) + '">' + esc(sample || '—') + '</td>' +
       '<td style="white-space:nowrap">' +
+//MODE:cluster
         '<button class="btn btn-outline" style="padding:4px 10px;font-size:10px;margin-right:6px" onclick="editModelAccessRole(\'' + esc(r.role_id) + '\')">Edit</button>' +
+//MODE:end
+//MODE:standalone
+        '<button class="btn btn-outline" style="padding:4px 10px;font-size:10px;margin-right:6px" onclick="editModelAccessRole(\'' + jsq(r.role_id) + '\')">Edit</button>' +
+//MODE:end
         retire +
       '</td>' +
     '</tr>';
@@ -1433,16 +1569,45 @@ var maCostCenterPeople = {};
 var maGroupFacets = [];
 var maGroupSelection = new Set();
 var maWizardGroups = [];
+//MODE:standalone
+var maWizardCreatedRole = null;
+var maWizardGeneration = 0;
+var maWizardSubmitting = false;
+// True when a create POST may have committed while its response was lost:
+// a retry then replays the idempotent create (createWizardRole resends the
+// same create_request_id) instead of POSTing a second role with the same
+// name.
+var maWizardCreateUnconfirmed = false;
+// The idempotency key of the in-flight create. The create endpoint replays
+// on create_request_id, so a retry after a lost response resends this same
+// id; it is cleared when the wizard opens, closes, or succeeds.
+var maWizardCreatePayload = null;
+//MODE:end
 var maGroupPeople = {};
 var maAssignmentMode = 'cost_center';
 var maGroupSearchTimer = null;
 
 function openRoleWizard() {
   closeRoleEditor();
+//MODE:standalone
+  maWizardGeneration++;
+//MODE:end
   maWizardStep = 1;
   maNewModels = [];
   maWizardCostCenters = [];
   maWizardGroups = [];
+//MODE:standalone
+  maWizardCreatedRole = null;
+  maWizardSubmitting = false;
+  maWizardCreateUnconfirmed = false;
+  maWizardCreatePayload = null;
+  document.getElementById('ma-wizard-create').disabled = false;
+  // A retry after a partial failure locks the name/default controls (see
+  // createModelAccessRole); reopening the wizard must unlock them again.
+  document.getElementById('ma-new-name').disabled = false;
+  document.getElementById('ma-new-default').disabled = false;
+  document.getElementById('ma-wizard-replace').disabled = false;
+//MODE:end
   maCostCenterSelection = new Set();
   maGroupSelection = new Set();
   document.getElementById('ma-new-name').value = '';
@@ -1599,6 +1764,25 @@ function saveAssignmentPicker() {
 }
 
 function closeRoleWizard() {
+//MODE:standalone
+  // Closing during a pending submit would strand the already-created
+  // role: the assignment chain keeps writing server-side with no wizard
+  // left to retry from. Block user closes until the submit settles; the
+  // success path clears the flag before closing, and a partial failure
+  // re-enables the close with its retry UI.
+  if (maWizardSubmitting) return;
+  // A partial failure leaves the created role with unfinished assignments
+  // and the wizard open on its retry step. Closing then abandons the retry
+  // UI: the role stays half-configured until it is edited from the roles
+  // table, so the abandonment must be an explicit choice, not a silent
+  // × click.
+  if (maWizardCreatedRole && !confirm('Assignments for "' + maWizardCreatedRole.name + '" are incomplete. Close anyway? The role remains in the table, where it can be edited.')) return;
+  maWizardGeneration++;
+  maWizardCreatedRole = null;
+  maWizardSubmitting = false;
+  maWizardCreateUnconfirmed = false;
+  maWizardCreatePayload = null;
+//MODE:end
   document.getElementById('ma-role-wizard').classList.remove('open');
 }
 
@@ -1685,39 +1869,152 @@ function roleWizardNext() {
 }
 
 function roleWizardBack() {
+//MODE:standalone
+  // The picker is only reachable by walking back, and it stays editable
+  // while a submit is pending: an edit made then would be silently
+  // dropped when the submit succeeds. Hold the step until it settles.
+  if (maWizardSubmitting) return;
+//MODE:end
   if (maWizardStep > 1) { maWizardStep--; renderRoleWizard(); }
 }
 
+//MODE:standalone
+// Retry after a partial failure: the role already exists, so re-apply the
+// wizard's current model, budget, and token-limit selections before
+// finishing the remaining assignments. Without this, a retry could
+// report success for a role whose persisted policy differs from what
+// the review step shows.
+function reapplyWizardRolePolicy(role, models, monthlyUSD, monthlyTokens) {
+  return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/models'), 'PUT', { models: models })
+    .then(function() { return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/budget'), 'PUT', { monthly_usd: monthlyUSD }); })
+    .then(function() { return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/token-budget'), 'PUT', { monthly_tokens: monthlyTokens }); })
+    .then(function() { return role; });
+}
+
+// Create the role. The create endpoint is idempotent on create_request_id:
+// a retry after a lost response replays the same id and the server returns
+// the original role instead of answering with a name conflict that carries
+// no role id, so the pending assignments can still be finished.
+function createWizardRole(name, models, isDefault, replaceDefault, monthlyUSD, monthlyTokens) {
+  maWizardCreateUnconfirmed = false;
+  if (!maWizardCreatePayload || !maWizardCreatePayload.requestID) {
+    maWizardCreatePayload = { requestID: (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : String(Date.now()) + '-' + Math.random().toString(16).slice(2) };
+  }
+  return sendJSONStatus(maURL('/roles'), 'POST', {
+    name: name, description: '', models: models, is_default: isDefault,
+    replace_default: replaceDefault, monthly_usd: monthlyUSD, monthly_tokens: monthlyTokens,
+    create_request_id: maWizardCreatePayload.requestID
+  });
+}
+//MODE:end
 function createModelAccessRole() {
+//MODE:standalone
+  if (maWizardSubmitting) return;
+//MODE:end
   var name = (document.getElementById('ma-new-name').value || '').trim();
   var models = maNewModels;
   var isDefault = document.getElementById('ma-new-default').checked;
   var monthlyUSD = parseFloat(document.getElementById('ma-new-budget').value || '0') || 0;
   var monthlyTokens = parseInt(document.getElementById('ma-new-token-limit').value || '0', 10) || 0;
+//MODE:standalone
+  var costCenters = maWizardCostCenters.slice();
+  var groups = maWizardGroups.slice();
+//MODE:end
   if (!name) { showToast('Role name is required', 'error'); return; }
   var duplicate = maRoles.filter(function(r) { return (r.name || '').toLowerCase() === name.toLowerCase(); })[0];
+//MODE:cluster
   if (duplicate) { showToast('A role named "' + duplicate.name + '" already exists. Choose another name.', 'error'); return; }
+//MODE:end
+//MODE:standalone
+  if (!maWizardCreatedRole && !maWizardCreateUnconfirmed && duplicate) { showToast('A role named "' + duplicate.name + '" already exists. Choose another name.', 'error'); return; }
+//MODE:end
   var existingDefault = maRoles.filter(function(r) { return r.is_default; })[0];
   var replaceDefault = isDefault && existingDefault && document.getElementById('ma-wizard-replace').checked;
+//MODE:cluster
   sendJSON(maURL('/roles'), 'POST', {
     name: name, description: '', models: models, is_default: isDefault,
     replace_default: !!replaceDefault, monthly_usd: monthlyUSD, monthly_tokens: monthlyTokens
   }).then(function(role) {
+//MODE:end
+//MODE:standalone
+  var generation = maWizardGeneration;
+  var submitButton = document.getElementById('ma-wizard-create');
+  maWizardSubmitting = true;
+  submitButton.disabled = true;
+  (maWizardCreatedRole
+    ? reapplyWizardRolePolicy(maWizardCreatedRole, models, monthlyUSD, monthlyTokens)
+    : createWizardRole(name, models, isDefault, !!replaceDefault, monthlyUSD, monthlyTokens)
+  ).then(function(role) {
+    if (generation !== maWizardGeneration) return null;
+    maWizardCreatedRole = role;
+    maWizardCreateUnconfirmed = false;
+//MODE:end
     var applyPeople = Promise.resolve(null);
+//MODE:cluster
     if (!isDefault) {
+//MODE:end
+//MODE:standalone
+    // Dispatch assignments from the role's persisted default status, not
+    // the editable checkbox: after recovering a committed create the
+    // operator may have toggled the checkbox, and the role's own status is
+    // what the pending assignments must follow.
+    if (!role.is_default) {
+//MODE:end
+//MODE:cluster
       if (maWizardCostCenters.length) {
+//MODE:end
+//MODE:standalone
+      if (costCenters.length) {
+//MODE:end
         applyPeople = applyPeople.then(function() {
+//MODE:cluster
           return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'cost_center', values: maWizardCostCenters});
+//MODE:end
+//MODE:standalone
+          return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'cost_center', values: costCenters})
+            .then(function() {
+              // Remove only the entries this request applied: the picker
+              // stays editable while a submit is pending, so an edit made
+              // after the snapshot must survive for the retry.
+              if (generation === maWizardGeneration) maWizardCostCenters = maWizardCostCenters.filter(function(cc) { return costCenters.indexOf(cc) < 0; });
+            });
+//MODE:end
         });
       }
+//MODE:cluster
       if (maWizardGroups.length) {
+//MODE:end
+//MODE:standalone
+      if (groups.length) {
+//MODE:end
         applyPeople = applyPeople.then(function() {
+//MODE:cluster
           return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'group', values: maWizardGroups});
+//MODE:end
+//MODE:standalone
+          return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'group', values: groups})
+            .then(function() {
+              // Same snapshot filter as the cost-center callback: an edit
+              // made while this request was pending survives for the retry.
+              if (generation === maWizardGeneration) maWizardGroups = maWizardGroups.filter(function(g) { return groups.indexOf(g) < 0; });
+            });
+//MODE:end
         });
       }
     }
     return applyPeople.then(function() { return role; });
   }).then(function(role) {
+//MODE:standalone
+    if (!role || generation !== maWizardGeneration) return;
+    // Clear the retry state before closing so the close guard treats this
+    // as a completed wizard, not an abandonment needing confirmation.
+    maWizardSubmitting = false;
+    maWizardCreatedRole = null;
+    maWizardCreateUnconfirmed = false;
+    maWizardCreatePayload = null;
+//MODE:end
     showToast('Role "' + role.name + '" created', 'success');
     closeRoleWizard();
     closeRoleEditor();
@@ -1726,11 +2023,59 @@ function createModelAccessRole() {
       setTimeout(function() { maHighlightRoleID = null; renderModelAccessRoles(); }, 3000);
     });
   }).catch(function(err) {
+//MODE:standalone
+    if (generation !== maWizardGeneration) return;
+//MODE:end
     var msg = err.message || String(err);
+//MODE:cluster
     if (msg.indexOf('model access role name already exists') >= 0) {
+//MODE:end
+//MODE:standalone
+    if (maWizardCreatedRole) {
+      showToast('Role created, but an assignment failed. Retry to finish the remaining assignments.', 'error');
+      loadModelAccess();
+      // The roles API can only re-apply models, budget, and assignments on a
+      // retry — not the name or the default flag. Lock those controls to the
+      // created role's persisted values so the review step cannot show a
+      // rename or default change the retry would silently drop.
+      var createdRole = maWizardCreatedRole;
+      var nameInput = document.getElementById('ma-new-name');
+      if (nameInput) { nameInput.value = createdRole.name; nameInput.disabled = true; }
+      var defaultInput = document.getElementById('ma-new-default');
+      if (defaultInput) { defaultInput.checked = !!createdRole.is_default; defaultInput.disabled = true; }
+      var replaceInput = document.getElementById('ma-wizard-replace');
+      if (replaceInput) replaceInput.disabled = true;
+    } else if (msg.indexOf('model access role name already exists') >= 0) {
+//MODE:end
       showToast('That role name is already in use, including by a retired role. Choose another name.', 'error');
     } else {
+//MODE:standalone
+      // Only an ambiguous outcome can leave a committed create behind: a
+      // transport failure carries no HTTP status and a 5xx can commit
+      // before failing, while a definitive 4xx rejection (validation,
+      // auth) provably created nothing and a retry must POST fresh.
+      if (!err.status || err.status >= 500) {
+        maWizardCreateUnconfirmed = true;
+        // The retry replays the same create_request_id, so the committed
+        // role (if any) keeps its original name and default flag: lock
+        // those controls to the inputs the failed POST carried, matching
+        // the partial-failure branch above.
+        var nameInput = document.getElementById('ma-new-name');
+        if (nameInput) nameInput.disabled = true;
+        var defaultInput = document.getElementById('ma-new-default');
+        if (defaultInput) defaultInput.disabled = true;
+        var replaceInput = document.getElementById('ma-wizard-replace');
+        if (replaceInput) replaceInput.disabled = true;
+      }
+//MODE:end
       showToast('Create failed: ' + msg, 'error');
+//MODE:standalone
+    }
+  }).finally(function() {
+    if (generation === maWizardGeneration) {
+      maWizardSubmitting = false;
+      submitButton.disabled = false;
+//MODE:end
     }
   });
 }
@@ -1789,10 +2134,23 @@ function retireModelAccessRole(roleID) {
 
 function loadModelAccessSubjects() {
   var q = (document.getElementById('ma-subject-search') || {}).value || '';
+//MODE:standalone
+  var generation = ++maSubjectsGeneration;
+//MODE:end
   fetchJSON(maURL('/subjects?limit=200&q=' + encodeURIComponent(q))).then(function(subjects) {
+//MODE:standalone
+    if (generation !== maSubjectsGeneration) return;
+//MODE:end
     maSubjects = subjects || [];
     renderModelAccessSubjects();
+//MODE:cluster
   }).catch(function(err) { showToast('Subjects failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+  }).catch(function(err) {
+    if (generation === maSubjectsGeneration) showToast('Subjects failed: ' + err.message, 'error');
+  });
+//MODE:end
 }
 
 function renderModelAccessSubjects() {
@@ -1810,7 +2168,12 @@ function renderModelAccessSubjects() {
     var ccText = cc ? (ccDesc && ccDesc !== cc ? cc + ' — ' + ccDesc : cc) : (ccDesc || '—');
     var personName = s.display_name || s.email || s.external_id;
     var personSub = s.email && s.email !== personName ? s.email : '';
+//MODE:cluster
     return '<tr style="cursor:pointer" onclick="showModelAccessEffective(\'' + esc(s.subject_id) + '\')">' +
+//MODE:end
+//MODE:standalone
+    return '<tr style="cursor:pointer" onclick="showModelAccessEffective(\'' + jsq(s.subject_id) + '\')">' +
+//MODE:end
       '<td class="ts">' + esc(s.first_name || '—') + '</td>' +
       '<td class="ts">' + esc(s.last_name || '—') + '</td>' +
       '<td><strong>' + esc(personName) + '</strong>' + (personSub ? '<div class="ts" style="font-size:10px">' + esc(personSub) + '</div>' : '') + '</td>' +
@@ -1824,7 +2187,14 @@ function renderModelAccessSubjects() {
 
 function showModelAccessEffective(subjectID) {
   maEffectiveSubject = subjectID;
+//MODE:standalone
+  var generation = ++maEffectiveGeneration;
+  document.getElementById('ma-effective-body').innerHTML = '<div class="ts" style="padding:14px 0">Loading…</div>';
+//MODE:end
   fetchJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/effective')).then(function(e) {
+//MODE:standalone
+    if (maEffectiveGeneration !== generation || maEffectiveSubject !== subjectID) return;
+//MODE:end
     var body = document.getElementById('ma-effective-body');
     var chips = function(arr) { return (arr || []).length ? arr.map(function(m) { return '<span class="tag tag-blu">' + esc(m) + '</span>'; }).join(' ') : '<span class="ts">none</span>'; };
     var sub = maSubjects.filter(function(s) { return s.subject_id === subjectID; })[0] || {};
@@ -1837,7 +2207,12 @@ function showModelAccessEffective(subjectID) {
         '</div>'
       : '<span class="ts">none</span>';
     var roleChips = (e.role_refs || []).length ? e.role_refs.map(function(ref) {
+//MODE:cluster
       return '<span class="tag tag-blu">' + esc(ref.name) + ' <button class="btn" style="padding:0;background:none;color:inherit;font-weight:700" title="Remove role" onclick="removeRoleFromEffective(\'' + esc(ref.role_id) + '\')">&times;</button></span>';
+//MODE:end
+//MODE:standalone
+      return '<span class="tag tag-blu">' + esc(ref.name) + ' <button class="btn" style="padding:0;background:none;color:inherit;font-weight:700" title="Remove role" onclick="removeRoleFromEffective(\'' + jsq(ref.role_id) + '\')">&times;</button></span>';
+//MODE:end
     }).join(' ') : '<span class="ts">none</span>';
     var assigned = {};
     (e.role_ids || []).forEach(function(id) { assigned[id] = true; });
@@ -1892,11 +2267,25 @@ function showModelAccessEffective(subjectID) {
     document.getElementById('ma-effective-ov').classList.add('show');
     loadModelAccessCredits(subjectID);
     loadModelAccessTokenCredits(subjectID);
+//MODE:cluster
   }).catch(function(err) { showToast('Effective access failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+  }).catch(function(err) {
+    if (maEffectiveSubject !== subjectID) return;
+    showToast('Effective access failed: ' + err.message, 'error');
+  });
+//MODE:end
 }
 
 function loadModelAccessCredits(subjectID) {
+//MODE:standalone
+  var generation = ++maCreditsGeneration;
+//MODE:end
   fetchJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/credits')).then(function(credits) {
+//MODE:standalone
+    if (maCreditsGeneration !== generation || maEffectiveSubject !== subjectID) return;
+//MODE:end
     var el = document.getElementById('ma-credit-list');
     if (!el) return;
     if (!credits.length) { el.textContent = 'No extra credits.'; return; }
@@ -1905,36 +2294,117 @@ function loadModelAccessCredits(subjectID) {
         '<span class="tag tag-blu">$' + esc(String(c.amount_usd)) + '</span>' +
         '<span>' + (c.expires_at ? 'expires ' + esc(String(c.expires_at).slice(0, 10)) : 'no expiry') + '</span>' +
         '<span class="ts">' + esc(c.reason) + '</span>' +
+//MODE:cluster
         '<button class="btn btn-outline" style="padding:2px 6px;font-size:10px" onclick="removeModelAccessCredit(\'' + esc(c.credit_id) + '\')">Remove</button>' +
+//MODE:end
+//MODE:standalone
+        '<button class="btn btn-outline" style="padding:2px 6px;font-size:10px" onclick="removeModelAccessCredit(\'' + jsq(c.credit_id) + '\')">Remove</button>' +
+//MODE:end
       '</div>';
     }).join('');
+//MODE:cluster
   }).catch(function() { var el = document.getElementById('ma-credit-list'); if (el) el.textContent = 'Credits unavailable.'; });
+//MODE:end
+//MODE:standalone
+  }).catch(function() {
+    if (maCreditsGeneration !== generation || maEffectiveSubject !== subjectID) return;
+    var el = document.getElementById('ma-credit-list');
+    if (el) el.textContent = 'Credits unavailable.';
+  });
+//MODE:end
 }
 
 function addModelAccessCredit() {
   if (!maEffectiveSubject) return;
+//MODE:standalone
+  if (maCreditSubmitting) return;
+  var subjectID = maEffectiveSubject;
+//MODE:end
   var amount = parseFloat(document.getElementById('ma-credit-amount').value || '0');
   var reason = (document.getElementById('ma-credit-reason').value || '').trim();
   var date = document.getElementById('ma-credit-expiry').value;
   if (!(amount > 0) || !reason) { showToast('Amount and reason are required', 'error'); return; }
   var expires = date ? new Date(date + 'T23:59:59Z').toISOString() : null;
+//MODE:cluster
   var requestId = (window.crypto && crypto.randomUUID)
     ? crypto.randomUUID()
     : String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+//MODE:end
+//MODE:standalone
+  // Retry-safety: request IDs are retained per subject and input
+  // fingerprint. A failed POST may still have committed server-side, so a
+  // retry of the same submission must reuse its request_id instead of
+  // minting a new one; an entry is cleared only after that submission
+  // succeeds.
+  var requestKey = subjectID + '\n' + amount + '\n' + reason + '\n' + expires;
+  if (!maCreditRequests.has(requestKey)) {
+    // Retention is deliberate and unbounded within the page session: the
+    // server dedupes credits on (tenant, request_id) indefinitely, so
+    // dropping a failed submission's ID could double a credit that actually
+    // committed while its response was lost. Entries exist only for
+    // submissions that did not succeed (successes delete theirs) and a page
+    // reload resets the ledger, which bounds it in practice. A Map rather
+    // than an object literal keeps admin-typed reason text from colliding
+    // with Object.prototype keys such as __proto__.
+    maCreditRequests.set(requestKey, (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : String(Date.now()) + '-' + Math.random().toString(16).slice(2));
+    persistCreditRequests();
+  }
+  var requestId = maCreditRequests.get(requestKey);
+  maCreditSubmitting = true;
+//MODE:end
   sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/credits'), 'POST', {amount_usd: amount, expires_at: expires, reason: reason, request_id: requestId})
     .then(function() {
+//MODE:standalone
+      maCreditSubmitting = false;
+      // Delete before the subject guard: a subject switch must not leave a
+      // completed submission's ID in the ledger, or a later identical
+      // submission would replay the original credit instead of adding one.
+      maCreditRequests.delete(requestKey);
+      persistCreditRequests();
+      if (maEffectiveSubject !== subjectID) return;
+//MODE:end
       showToast('Credit added', 'success');
       document.getElementById('ma-credit-amount').value = '';
       document.getElementById('ma-credit-reason').value = '';
       loadModelAccessCredits(maEffectiveSubject);
+//MODE:cluster
     }).catch(function(err) { showToast('Credit failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+    }).catch(function(err) {
+      maCreditSubmitting = false;
+      // Report the failure even after a subject switch: the POST may have
+      // committed server-side, and hiding the notice would leave a possibly
+      // committed credit unacknowledged. Name the subject so the notice
+      // stays tied to the failed submission.
+      if (maEffectiveSubject === subjectID) {
+        showToast('Credit failed: ' + err.message, 'error');
+      } else {
+        var who = maSubjects.filter(function(s) { return s.subject_id === subjectID; })[0];
+        showToast('Credit failed for ' + ((who && (who.display_name || who.email)) || subjectID) + ': ' + err.message, 'error');
+      }
+    });
+//MODE:end
 }
 
 function removeModelAccessCredit(creditID) {
   if (!maEffectiveSubject) return;
+//MODE:cluster
   sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/credits/' + encodeURIComponent(creditID)), 'DELETE')
     .then(function() { showToast('Credit removed', 'success'); loadModelAccessCredits(maEffectiveSubject); })
     .catch(function(err) { showToast('Remove credit failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+  var subjectID = maEffectiveSubject;
+  sendJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/credits/' + encodeURIComponent(creditID)), 'DELETE')
+    .then(function() {
+      if (maEffectiveSubject !== subjectID) return;
+      showToast('Credit removed', 'success'); loadModelAccessCredits(subjectID);
+    })
+    .catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Remove credit failed: ' + err.message, 'error'); });
+//MODE:end
 }
 function loadModelAccessTokenCredits(subjectID) {
   fetchJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/token-credits')).then(function(credits) {
@@ -1976,83 +2446,289 @@ function removeModelAccessTokenCredit(creditID) {
 
 function addRoleToEffective() {
   if (!maEffectiveSubject) return;
+//MODE:standalone
+  var subjectID = maEffectiveSubject;
+//MODE:end
   var sel = document.getElementById('ma-add-role');
   var roleID = sel ? sel.value : '';
   if (!roleID) { showToast('Select a role first', 'error'); return; }
+//MODE:cluster
   sendJSON(maURL('/roles/' + encodeURIComponent(roleID) + '/subjects'), 'POST', {subject_id: maEffectiveSubject})
+//MODE:end
+//MODE:standalone
+  sendJSON(maURL('/roles/' + encodeURIComponent(roleID) + '/subjects'), 'POST', {subject_id: subjectID})
+//MODE:end
     .then(function() {
+//MODE:standalone
+      if (maEffectiveSubject !== subjectID) return;
+//MODE:end
       showToast('Role added', 'success');
+//MODE:cluster
       loadModelAccess().then(function() { showModelAccessEffective(maEffectiveSubject); });
     }).catch(function(err) { showToast('Add role failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+      loadModelAccess().then(function() {
+        if (maEffectiveSubject !== subjectID) return;
+        showModelAccessEffective(subjectID);
+      });
+    }).catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Add role failed: ' + err.message, 'error'); });
+//MODE:end
 }
 
 function removeRoleFromEffective(roleID) {
   if (!maEffectiveSubject) return;
+//MODE:cluster
   sendJSON(maURL('/roles/' + encodeURIComponent(roleID) + '/subjects/' + encodeURIComponent(maEffectiveSubject)), 'DELETE')
+//MODE:end
+//MODE:standalone
+  var subjectID = maEffectiveSubject;
+  sendJSON(maURL('/roles/' + encodeURIComponent(roleID) + '/subjects/' + encodeURIComponent(subjectID)), 'DELETE')
+//MODE:end
     .then(function() {
+//MODE:standalone
+      if (maEffectiveSubject !== subjectID) return;
+//MODE:end
       showToast('Role removed', 'success');
+//MODE:cluster
       loadModelAccess().then(function() { showModelAccessEffective(maEffectiveSubject); });
     }).catch(function(err) { showToast('Remove role failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+      loadModelAccess().then(function() {
+        if (maEffectiveSubject !== subjectID) return;
+        showModelAccessEffective(subjectID);
+      });
+    }).catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Remove role failed: ' + err.message, 'error'); });
+//MODE:end
 }
 
 function closeModelAccessEffective() {
+//MODE:standalone
+  maEffectiveGeneration++;
+  maEffectiveSubject = null;
+//MODE:end
   document.getElementById('ma-effective-ov').classList.remove('show');
 }
 
 function editModelAccessGrants() {
   if (!maEffectiveSubject) return;
+//MODE:standalone
+  // Write completions are guarded by selection (the dialog still shows this
+  // subject), not by the GET request generation: a same-subject reload that
+  // started while the write was pending must not swallow the write's toast
+  // and refresh, or a committed change could sit on screen as stale
+  // pre-write data. closeModelAccessEffective clears the subject, so a
+  // closed dialog still suppresses the refresh.
+  var subjectID = maEffectiveSubject;
+//MODE:end
   var value = prompt('Direct grants: comma-separated exact model IDs (empty clears grants)', '');
   if (value === null) return;
+//MODE:cluster
   sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/grants'), 'PUT', {models: splitModels(value)})
     .then(function() { showToast('Grants saved', 'success'); showModelAccessEffective(maEffectiveSubject); })
     .catch(function(err) { showToast('Grants failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+  sendJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/grants'), 'PUT', {models: splitModels(value)})
+    .then(function() {
+      if (maEffectiveSubject !== subjectID) return;
+      showToast('Grants saved', 'success'); showModelAccessEffective(subjectID);
+    })
+    .catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Grants failed: ' + err.message, 'error'); });
+//MODE:end
 }
 
 function editModelAccessRestriction(enable) {
   if (!maEffectiveSubject) return;
+//MODE:standalone
+  var subjectID = maEffectiveSubject;
+//MODE:end
   if (!enable) {
+//MODE:cluster
     sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/restriction'), 'PUT', {enabled: false, models: []})
       .then(function() { showToast('Restriction removed', 'success'); showModelAccessEffective(maEffectiveSubject); })
       .catch(function(err) { showToast('Restriction failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+    sendJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/restriction'), 'PUT', {enabled: false, models: []})
+      .then(function() {
+        if (maEffectiveSubject !== subjectID) return;
+        showToast('Restriction removed', 'success'); showModelAccessEffective(subjectID);
+      })
+      .catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Restriction failed: ' + err.message, 'error'); });
+//MODE:end
     return;
   }
   var value = prompt('Restrict to these exact model IDs. Leave empty to deny all models.', '');
   if (value === null) return;
+//MODE:cluster
   sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/restriction'), 'PUT', {enabled: true, models: splitModels(value)})
     .then(function() { showToast('Restriction saved', 'success'); showModelAccessEffective(maEffectiveSubject); })
     .catch(function(err) { showToast('Restriction failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+  sendJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/restriction'), 'PUT', {enabled: true, models: splitModels(value)})
+    .then(function() {
+      if (maEffectiveSubject !== subjectID) return;
+      showToast('Restriction saved', 'success'); showModelAccessEffective(subjectID);
+    })
+    .catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Restriction failed: ' + err.message, 'error'); });
+//MODE:end
 }
 
 function clearModelAccessDefaultExclusion() {
   if (!maEffectiveSubject) return;
+//MODE:cluster
   sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/exclude-default'), 'DELETE')
     .then(function() { showToast('Default exclusion cleared', 'success'); showModelAccessEffective(maEffectiveSubject); })
     .catch(function(err) { showToast('Clear failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+  var subjectID = maEffectiveSubject;
+  sendJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/exclude-default'), 'DELETE')
+    .then(function() {
+      if (maEffectiveSubject !== subjectID) return;
+      showToast('Default exclusion cleared', 'success'); showModelAccessEffective(subjectID);
+    })
+    .catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Clear failed: ' + err.message, 'error'); });
+//MODE:end
 }
 
 function excludeModelAccessDefault() {
   if (!maEffectiveSubject) return;
+//MODE:standalone
+  var subjectID = maEffectiveSubject;
+//MODE:end
   var reason = prompt('Reason for excluding this subject from the default role', '');
   if (!reason) return;
+//MODE:cluster
   sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/exclude-default'), 'POST', {reason: reason})
     .then(function() { showToast('Excluded from default', 'success'); showModelAccessEffective(maEffectiveSubject); })
     .catch(function(err) { showToast('Exclude failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+  sendJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/exclude-default'), 'POST', {reason: reason})
+    .then(function() {
+      if (maEffectiveSubject !== subjectID) return;
+      showToast('Excluded from default', 'success'); showModelAccessEffective(subjectID);
+    })
+    .catch(function(err) { if (maEffectiveSubject !== subjectID) return; showToast('Exclude failed: ' + err.message, 'error'); });
+//MODE:end
 }
 
+//MODE:cluster
 var safetyNetPolicy = null, safetyNetModels = [], safetyNetDraft = null;
+//MODE:end
+//MODE:standalone
+var safetyNetPolicy = null, safetyNetModels = [], safetyNetDraft = null, safetyNetModelLabels = {}, safetyNetGeneration = 0, safetyNetDraftFresh = false;
+// The save-and-reset cycle keeps the editor locked: safetyNetSaving is
+// set for the whole cycle (a second save cannot start, and every
+// rerender re-applies the lock), and safetyNetSaveReleasePending marks
+// the save as committed so a winning load render releases it.
+// safetyNetSaveReleaseGeneration names the load that owes the release —
+// the save's reset reload, or whichever newer load superseded it — so
+// the release always comes from the render actually on screen.
+// safetyNetResetPending marks a reset whose draft was discarded: a newer
+// non-reset load that supersedes it must rebuild the draft from its own
+// winning policy response before that release unlocks the editor.
+var safetyNetSaving = false, safetyNetSaveReleasePending = false, safetyNetSaveReleaseGeneration = 0, safetyNetResetPending = false;
+//MODE:end
 var pricingDiscountPolicy = null, pricingDiscountDraft = null;
 var modelRestrictionsPage = 0, modelRestrictionsPageSize = 50, modelRestrictionsHasMore = false;
 
+//MODE:cluster
 function loadSafetyNet() {
+//MODE:end
+//MODE:standalone
+function loadSafetyNet(resetDraft) {
+  var generation = ++safetyNetGeneration;
+  // A newer load supersedes the one that owed a pending save release:
+  // inherit the release so it still comes from the winning render.
+  if (safetyNetSaveReleasePending && generation > safetyNetSaveReleaseGeneration) safetyNetSaveReleaseGeneration = generation;
+  // A reset load discards the draft and its marker. A non-reset reload must
+  // leave a pending fresh marker alone: the draft still holds fetched
+  // server values that no render has applied yet, and clearing the marker
+  // here would make this load's render copy the stale controls over them.
+  if (resetDraft) {
+    safetyNetDraft = null;
+    safetyNetDraftFresh = false;
+    safetyNetResetPending = true;
+  }
+//MODE:end
   fetchJSON('/api/v1/admin/safety-net').then(function(policy) {
+//MODE:standalone
+    if (safetyNetGeneration !== generation) return;
+//MODE:end
     safetyNetPolicy = policy;
+//MODE:cluster
     safetyNetDraft = (policy.allowed_over_limit_models || []).slice();
+//MODE:end
+//MODE:standalone
+    if (resetDraft || safetyNetResetPending || !safetyNetDraft) {
+      safetyNetDraft = {
+        default_monthly_usd: policy.default_monthly_usd,
+        default_monthly_tokens: policy.default_monthly_tokens != null ? policy.default_monthly_tokens : 0,
+        enforced: !!policy.enforced,
+        allowed_over_limit_models: (policy.allowed_over_limit_models || []).slice()
+      };
+      // The controls still hold pre-fetch values: a freshly rebuilt draft
+      // must render the fetched policy, not re-absorb them, or a reset
+      // would keep showing the stale controls instead of the server's
+      // policy. An interaction during the fetch can recreate the draft
+      // from the previous policy; the reset still wins and discards it.
+      safetyNetDraftFresh = true;
+      safetyNetResetPending = false;
+    }
+//MODE:end
     return fetchJSON('/api/v1/admin/models').then(function(models) {
+//MODE:standalone
+      if (safetyNetGeneration !== generation) return;
+//MODE:end
       safetyNetModels = (Array.isArray(models) ? models : []).map(function(m) {
+//MODE:cluster
         return m.name || m.id || m.model || '';
+//MODE:end
+//MODE:standalone
+        var id=m.targetModel || m.name || m.id || m.model || '';
+        safetyNetModelLabels[id]=m.name||id;return id;
+//MODE:end
       }).filter(Boolean);
+//MODE:cluster
     }).catch(function() { safetyNetModels = []; }).then(renderSafetyNet);
+//MODE:end
+//MODE:standalone
+    }).catch(function() {
+      if (safetyNetGeneration !== generation) return;
+      safetyNetModels = [];
+    }).then(function() {
+      if (safetyNetGeneration !== generation) return;
+      // A committed save releases its lock here, after this load's render
+      // has fetched the saved policy: clearing the flags first lets the
+      // render below rebuild the controls unlocked. A superseded load
+      // returns above, so when the save's reset reload is outrun by a
+      // newer load, that newer load's render performs the release.
+      if (safetyNetSaveReleasePending && generation === safetyNetSaveReleaseGeneration) {
+        safetyNetSaveReleasePending = false;
+        safetyNetSaving = false;
+        safetyNetSaveReleaseGeneration = 0;
+      }
+      renderSafetyNet();
+    });
+//MODE:end
   }).catch(function(err) {
+//MODE:standalone
+    if (safetyNetGeneration !== generation) return;
+    // A failed load that owed the pending release still settles the
+    // save cycle: the PUT committed before its reload started, and
+    // leaving the lock pending would re-lock the next render for no
+    // reason. Loads from before the save keep the lock held.
+    if (safetyNetSaveReleasePending && generation === safetyNetSaveReleaseGeneration) {
+      safetyNetSaving = false;
+      safetyNetSaveReleasePending = false;
+      safetyNetSaveReleaseGeneration = 0;
+    }
+//MODE:end
     document.getElementById('safety-net-body').innerHTML = '<div class="err-msg">' + esc(err.message) + '</div>';
   });
 }
@@ -2105,7 +2781,17 @@ function savePricingDiscounts() {
   syncPricingDiscountDraft();
   var version = document.getElementById('pricing-discount-version').value.trim();
   updateJSON('/api/v1/admin/pricing-discounts', 'PUT', {version:version, rules:pricingDiscountDraft}).then(function() {
+//MODE:cluster
     return fetch('/api/v1/admin/pricing/refresh', {method:'POST'});
+//MODE:end
+//MODE:standalone
+    return fetch('/api/v1/admin/pricing/refresh', {method:'POST'}).then(function(response) {
+      if (!response.ok) throw new Error('Policy saved, but rate refresh failed (HTTP ' + response.status + '). Retry refresh before relying on the new rates.');
+      return response.json().then(function(result) {
+        if (result.error) throw new Error('Policy saved, but rate refresh failed. Retry refresh before relying on the new rates.');
+      });
+    });
+//MODE:end
   }).then(function() {
     loadPricingDiscounts();
   }).catch(function(err) {
@@ -2114,11 +2800,35 @@ function savePricingDiscounts() {
 }
 function renderSafetyNet() {
   if (!safetyNetPolicy) return;
+//MODE:cluster
   var p = safetyNetPolicy, draft = safetyNetDraft || [];
+//MODE:end
+//MODE:standalone
+  var limitInput = document.getElementById('safety-limit');
+  var enforcedInput = document.getElementById('safety-enforced');
+  var tokenInput = document.getElementById('safety-token-limit');
+  if (safetyNetDraftFresh) {
+    // The draft was just rebuilt from the fetched policy (reset or first
+    // load): render it as-is instead of copying the stale controls.
+    safetyNetDraftFresh = false;
+  } else {
+    if (limitInput && safetyNetDraft) safetyNetDraft.default_monthly_usd = parseFloat(limitInput.value || '0') || 0;
+    if (tokenInput && safetyNetDraft) safetyNetDraft.default_monthly_tokens = parseInt(tokenInput.value || '0', 10) || 0;
+    if (enforcedInput && safetyNetDraft) safetyNetDraft.enforced = enforcedInput.checked;
+  }
+  if (!safetyNetDraft) safetyNetDraft = {default_monthly_usd: safetyNetPolicy.default_monthly_usd, default_monthly_tokens: safetyNetPolicy.default_monthly_tokens != null ? safetyNetPolicy.default_monthly_tokens : 0, enforced: !!safetyNetPolicy.enforced, allowed_over_limit_models: []};
+  var p = safetyNetDraft;
+  var draft = p.allowed_over_limit_models;
+//MODE:end
   var chips = draft.length ? draft.map(function(m, i) {
     return '<span class="badge badge-grn" style="font-size:10px;display:inline-flex;gap:6px;align-items:center;padding:5px 9px;margin:0 6px 6px 0">' + esc(m) + '<button class="btn" style="padding:0;background:none;color:inherit;font-weight:700" onclick="removeSafetyModel(' + i + ')">&times;</button></span>';
   }).join('') : '<span class="ts">No bypass models — over-limit users are fully blocked.</span>';
+//MODE:cluster
   var opts = safetyNetModels.filter(function(m) { return draft.indexOf(m) < 0; }).map(function(m) { return '<option value="' + esc(m) + '">'; }).join('');
+//MODE:end
+//MODE:standalone
+  var opts = safetyNetModels.filter(function(m) { return draft.indexOf(m) < 0; }).map(function(m) { return '<option value="' + esc(m) + '" label="' + esc(safetyNetModelLabels[m]||m) + '">'; }).join('');
+//MODE:end
   document.getElementById('safety-net-meta').textContent = p.enforced ? 'ENFORCING' : 'tracking only';
   document.getElementById('safety-net-body').innerHTML =
     '<div class="warning" style="margin-bottom:14px"><span class="icon">!</span><div>Checked on every request against month-to-date spend and tokens. Bypass list uses exact model IDs — the gateway must send the request model.</div></div>' +
@@ -2128,26 +2838,111 @@ function renderSafetyNet() {
       '<div><label class="field-label">Enforcement</label><label style="display:flex;gap:8px;align-items:center;margin-top:9px"><input type="checkbox" id="safety-enforced" style="width:auto" ' + (p.enforced ? 'checked' : '') + '> Block over-limit requests</label></div>' +
     '</div>' +
     '<div style="border-top:1px solid var(--border);padding-top:14px"><label class="field-label">Models allowed after the limit</label><div style="margin:8px 0 12px">' + chips + '</div>' +
+//MODE:cluster
       '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><input id="safety-model-add" list="safety-model-list" placeholder="Exact model ID" style="width:320px"><datalist id="safety-model-list">' + opts + '</datalist><button class="btn btn-outline" onclick="addSafetyModel()">Add model</button></div>' +
+//MODE:end
+//MODE:standalone
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><input id="safety-model-add" list="safety-model-list" placeholder="Choose or enter the billed model ID" style="width:320px"><datalist id="safety-model-list">' + opts + '</datalist><button class="btn btn-outline" onclick="addSafetyModel()">Add model</button></div>' +
+//MODE:end
     '</div><div style="margin-top:16px"><button class="btn btn-grn" onclick="saveSafetyNet()">Save safety net</button></div>';
+//MODE:standalone
+  // A save in progress keeps its lock across this rerender: the header
+  // Refresh button sits outside the editor body, and its load rerenders
+  // these controls — without re-applying the lock, the editor would
+  // unlock mid-cycle and an edit typed then would be discarded by the
+  // save's reset reload.
+  if (safetyNetSaving) {
+    var snLockBody = document.getElementById('safety-net-body');
+    if (snLockBody) Array.prototype.forEach.call(snLockBody.querySelectorAll('input,button'), function(c) { c.disabled = true; });
+  }
+//MODE:end
 }
+//MODE:standalone
+// A reset load nulls the draft while its policy fetch is in flight, but
+// the rendered controls stay clickable for that window. Rebuild the draft
+// from the last policy instead of dereferencing null; the controls only
+// exist after a policy has rendered, so the policy is always present.
+function rebuildSafetyNetDraft() {
+  return {default_monthly_usd: safetyNetPolicy.default_monthly_usd, default_monthly_tokens: safetyNetPolicy.default_monthly_tokens != null ? safetyNetPolicy.default_monthly_tokens : 0, enforced: !!safetyNetPolicy.enforced, allowed_over_limit_models: []};
+}
+//MODE:end
 function addSafetyModel() {
   var el = document.getElementById('safety-model-add'), value = (el.value || '').trim();
   if (!value) return;
   if (/[*?\[\] ]/.test(value)) { showToast('Use an exact model ID without spaces or wildcards', 'error'); return; }
+//MODE:cluster
   if (safetyNetDraft.indexOf(value) < 0) safetyNetDraft.push(value);
+//MODE:end
+//MODE:standalone
+  if (!safetyNetDraft) safetyNetDraft = rebuildSafetyNetDraft();
+  if (safetyNetDraft.allowed_over_limit_models.indexOf(value) < 0) safetyNetDraft.allowed_over_limit_models.push(value);
+//MODE:end
   renderSafetyNet();
 }
+//MODE:cluster
 function removeSafetyModel(index) { safetyNetDraft.splice(index, 1); renderSafetyNet(); }
+//MODE:end
+//MODE:standalone
+function removeSafetyModel(index) { if (!safetyNetDraft) safetyNetDraft = rebuildSafetyNetDraft(); safetyNetDraft.allowed_over_limit_models.splice(index, 1); renderSafetyNet(); }
+//MODE:end
 function saveSafetyNet() {
+//MODE:cluster
   var limit = parseFloat(document.getElementById('safety-limit').value);
+//MODE:end
+//MODE:standalone
+  // One save at a time: the editor stays locked for the whole
+  // save-and-reset cycle (see the lock below), so a click that slips
+  // past the disabled button must not start a parallel save.
+  if (safetyNetSaving) return;
+  var limitInput = document.getElementById('safety-limit');
+  var enforcedInput = document.getElementById('safety-enforced');
+  if (!safetyNetDraft) safetyNetDraft = rebuildSafetyNetDraft();
+  if (limitInput && safetyNetDraft) safetyNetDraft.default_monthly_usd = limitInput.value;
+  if (enforcedInput && safetyNetDraft) safetyNetDraft.enforced = enforcedInput.checked;
+  var limit = parseFloat(safetyNetDraft.default_monthly_usd);
+//MODE:end
   if (!(limit > 0)) { showToast('Monthly limit must be greater than zero', 'error'); return; }
   var tokenLimit = parseInt(document.getElementById('safety-token-limit').value, 10);
   if (isNaN(tokenLimit) || tokenLimit < 0) { showToast('Token limit must be >= 0 (0 = unlimited)', 'error'); return; }
+//MODE:cluster
   var payload = {default_monthly_usd: limit, default_monthly_tokens: tokenLimit, enforced: document.getElementById('safety-enforced').checked, allowed_over_limit_models: safetyNetDraft};
+//MODE:end
+//MODE:standalone
+  // Lock the editor for the whole save-and-reset cycle: the reset reload
+  // replaces the draft, so an edit typed during the round-trip would be
+  // silently discarded. renderSafetyNet re-applies this lock on every
+  // rerender while the save is pending — the header Refresh button sits
+  // outside this body and its load rerenders the controls — and the
+  // winning load's render after the save releases it. A failed save
+  // re-renders to unlock them.
+  var snBody = document.getElementById('safety-net-body');
+  if (snBody) Array.prototype.forEach.call(snBody.querySelectorAll('input,button'), function(c) { c.disabled = true; });
+  safetyNetSaving = true;
+  var payload = {default_monthly_usd: limit, default_monthly_tokens: tokenLimit, enforced: safetyNetDraft.enforced, allowed_over_limit_models: safetyNetDraft.allowed_over_limit_models};
+//MODE:end
   updateJSON('/api/v1/admin/safety-net', 'PUT', payload).then(function() {
+//MODE:cluster
     showToast('Safety net saved', 'success'); loadSafetyNet();
   }).catch(function(err) { showToast('Save failed: ' + err.message, 'error'); });
+//MODE:end
+//MODE:standalone
+    showToast('Safety net saved', 'success');
+    // Hold the lock until the reset reload has rendered: loadSafetyNet's
+    // completion clears the pending flag only on the winning
+    // generation's render, so a mid-flight Refresh cannot unlock the
+    // editor before the round-trip ends.
+    safetyNetSaveReleasePending = true;
+    loadSafetyNet(true);
+    // The reset reload that just started owns the pending release; a
+    // newer load that supersedes it inherits the release instead (see
+    // loadSafetyNet), so a superseded reset can never strand the lock.
+    safetyNetSaveReleaseGeneration = safetyNetGeneration;
+  }).catch(function(err) {
+    showToast('Save failed: ' + err.message, 'error');
+    safetyNetSaving = false;
+    renderSafetyNet();
+  });
+//MODE:end
 }
 
 function loadModelRestrictions(page) {
@@ -2180,7 +2975,12 @@ function changeModelRestrictionsPage(delta) {
 /* ================================================================
    Over limit — read-only budget overage list
    ================================================================ */
+//MODE:cluster
 var overLimitPage = 0, overLimitPageSize = 50, overLimitHasMore = false;
+//MODE:end
+//MODE:standalone
+var overLimitPage = 0, overLimitPageSize = 50, overLimitHasMore = false, overLimitGeneration = 0;
+//MODE:end
 
 function olMoney(v) {
   return '$' + (Number(v) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -2190,7 +2990,13 @@ function loadOverLimit(page) {
   if (typeof page === 'number') overLimitPage = page;
   var q = (document.getElementById('ol-search') || {}).value || '';
   var offset = overLimitPage * overLimitPageSize;
+//MODE:standalone
+  var generation = ++overLimitGeneration;
+//MODE:end
   fetchJSON(maURL('/over-limit?limit=' + overLimitPageSize + '&offset=' + offset + '&q=' + encodeURIComponent(q))).then(function(payload) {
+//MODE:standalone
+    if (generation !== overLimitGeneration) return;
+//MODE:end
     var rows = (payload && payload.users) || [];
     var total = (payload && payload.total) || 0;
     overLimitHasMore = offset + rows.length < total;
@@ -2226,6 +3032,9 @@ function loadOverLimit(page) {
     document.getElementById('ol-next').disabled = !overLimitHasMore;
     document.getElementById('ol-page-label').textContent = 'Page ' + (overLimitPage + 1);
   }).catch(function(err) {
+//MODE:standalone
+    if (generation !== overLimitGeneration) return;
+//MODE:end
     document.getElementById('ol-list').innerHTML = '<div class="err-msg">' + esc(err.message) + '</div>';
   });
 }
@@ -2261,7 +3070,12 @@ refreshTimer = setInterval(function() {
   if (document.querySelector('.modal-overlay.open, .confirm-overlay.open')) return;
   var ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) return;
+//MODE:cluster
   if (activeTab === 'people' || activeTab === 'model-access' || activeTab === 'safety-net') return; // editable tabs use explicit refresh/save
+//MODE:end
+//MODE:standalone
+  if (['people','model-access','safety-net','user-keys','user-quota','model-pricing','pricing-discounts'].includes(activeTab)) return; // editable tabs use explicit refresh/save
+//MODE:end
   refreshTab(activeTab, false);
 }, REFRESH_INTERVAL);
 
@@ -2272,6 +3086,14 @@ window.addEventListener('hashchange', function() {
 
 /* ================================================================
    Users tab: Pending Users (ungrouped)
+//MODE:standalone
+   Cluster/OpenShift-only flow, dead code in standalone mode: the endpoints
+   (/api/v1/admin/openshift-users, /api/v1/admin/groups,
+   /api/v1/admin/group-member) have no standalone routes and the
+   #pending-card element does not exist in this template. Kept for the
+   shared lineage with the cluster admin page; re-enabling requires
+   wiring the endpoints first.
+//MODE:end
    ================================================================ */
 function loadPendingUsers() {
   Promise.all([
@@ -2890,7 +3712,16 @@ function populateInvitePickers() {
   renderInviteGroup();
 }
 
+//MODE:cluster
 /* Deep-link from a people row: jump to the Keys tab with the person picked.
+//MODE:end
+//MODE:standalone
+/* Cluster/OpenShift-only invite flow, unreachable in standalone mode: the
+   keys tab is not in TABS (showTab falls back to people) and nothing serves
+   /api/v1/admin/keys/invites here. No standalone UI element links into it
+   anymore; re-enable only together with the backing endpoints.
+   Deep-link from a people row: jump to the Keys tab with the person picked.
+//MODE:end
    The slug is applied now (if the people cache is warm) and again once the
    cache lands; deepInviteSlug makes every intermediate picker rebuild keep
    re-selecting them, so no refresh can drop the selection. Cleared once the
@@ -3058,16 +3889,36 @@ function loadPeople(cb) {
     if (cb) cb();
   });
 }
+//MODE:cluster
 var partnerUsersAll = [], partnerManagersAll = [], partnerUsersPage = 0, partnerUsersPageSize = 50, partnerUsersHasMore = false, partnerUsersSearch = '', partnerUsersSearchTimer = null;
+//MODE:end
+//MODE:standalone
+var partnerUsersAll = [], partnerManagersAll = [], partnerUsersPage = 0, partnerUsersPageSize = 5, partnerUsersHasMore = false, partnerUsersSearch = '', partnerUsersSearchTimer = null;
+var partnerUsersGeneration;
+//MODE:end
 function loadPartnerUsers(page) {
   if (typeof page === 'number') partnerUsersPage = page;
   // refreshTab can call this before the declarations below have executed.
   // Keep the first request valid instead of sending undefined/NaN to the API.
+//MODE:cluster
   var limit = partnerUsersPageSize || 50;
+//MODE:end
+//MODE:standalone
+  var limit = partnerUsersPageSize || 5;
+//MODE:end
   var offset = (partnerUsersPage || 0) * limit;
+//MODE:cluster
   var q = '/api/v1/admin/partner-users?limit=' + limit + '&offset=' + offset;
+//MODE:end
+//MODE:standalone
+  var q = '/api/v1/admin/partner-users?limit=' + limit + '&offset=' + offset + '&state=' + encodeURIComponent(document.getElementById('partner-users-state').value);
+  var generation = partnerUsersGeneration = (partnerUsersGeneration || 0) + 1;
+//MODE:end
   if (partnerUsersSearch) q += '&search=' + encodeURIComponent(partnerUsersSearch);
   fetchJSON(q).then(function(payload) {
+//MODE:standalone
+    if(generation !== partnerUsersGeneration)return;
+//MODE:end
     var pageData = Array.isArray(payload) ? {users: payload, managers: payload, total: payload.length, has_more: false} : payload;
     partnerUsersAll = Array.isArray(pageData.users) ? pageData.users : [];
     partnerManagersAll = Array.isArray(pageData.managers) ? pageData.managers : partnerUsersAll;
@@ -3076,6 +3927,9 @@ function loadPartnerUsers(page) {
     loadRoles(partnerManagersAll);
     renderPartnerUsers();
   }).catch(function(e) {
+//MODE:standalone
+    if(generation !== partnerUsersGeneration)return;
+//MODE:end
     document.getElementById('partner-users-list').innerHTML = '<div class="err-msg">' + esc(e.message) + '</div>';
   });
 }
@@ -3094,7 +3948,12 @@ function changePartnerUsersPage(delta) {
 }
 function onPartnerUsersPageSize() {
   var sel = document.getElementById('partner-users-page-size');
+//MODE:cluster
   partnerUsersPageSize = parseInt(sel.value, 10) || 50;
+//MODE:end
+//MODE:standalone
+  partnerUsersPageSize = parseInt(sel.value, 10) || 5;
+//MODE:end
   loadPartnerUsers(0); // page size change resets to the first page
 }
 function onPartnerUsersSearch() {
@@ -3109,7 +3968,12 @@ function onPartnerUsersSearch() {
 function renderPartnerUsers() {
   var byId = {};
   partnerUsersAll.forEach(function(u) { byId[u.user_id] = u; });
+//MODE:cluster
   var html = '<table><thead><tr><th>User</th><th>Country</th><th>Manager</th><th>Role</th><th>Status</th></tr></thead><tbody>';
+//MODE:end
+//MODE:standalone
+  var html = '<table><thead><tr><th>User</th><th>Login</th><th>Country</th><th>Manager</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+//MODE:end
   partnerUsersAll.forEach(function(u) {
     var t = u.tags || {};
     var name = ((t.first_name || '') + ' ' + (t.last_name || '')).trim() || t.email || u.user_id;
@@ -3117,12 +3981,31 @@ function renderPartnerUsers() {
       var mt = m.tags || {}, mn = ((mt.first_name || '') + ' ' + (mt.last_name || '')).trim() || mt.email || m.user_id;
       return '<option value="' + esc(m.user_id) + '"' + (u.manager_user_id === m.user_id ? ' selected' : '') + '>' + esc(mn) + '</option>';
     }).join('');
+//MODE:standalone
+    if (u.manager_user_id && !partnerManagersAll.some(function(m) { return m.user_id === u.manager_user_id; })) {
+      var inactiveManager = byId[u.manager_user_id];
+      var inactiveManagerName = inactiveManager ? ((inactiveManager.tags || {}).first_name || inactiveManager.user_id) : u.manager_user_id;
+      managers = '<option value="' + esc(u.manager_user_id) + '" selected>' + esc(inactiveManagerName) + ' (inactive — choose a manager or none)</option>' + managers;
+    }
+//MODE:end
     html += '<tr data-user-id="' + esc(u.user_id) + '" tabindex="0" onclick="openPartnerDetails(' + partnerUsersAll.indexOf(u) + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openPartnerDetails(' + partnerUsersAll.indexOf(u) + ')}"><td><b>' + esc(name) + '</b><div class="ts">' + esc(t.email || '') + '<br>' + esc(u.user_id) + '</div></td>' +
+//MODE:cluster
       '<td>' + countryFlag(t.country) + esc(t.country || '—') + '</td>' +
       '<td><select class="tbl-input partner-manager" onchange="updatePartnerAccess(this)">' + managers + '</select></td>' +
       '<td><select class="tbl-input partner-role" onchange="updatePartnerAccess(this)">' +
+//MODE:end
+//MODE:standalone
+      '<td>' + esc((u.logins || []).join(', ')) + '</td><td>' + countryFlag(t.country) + esc(t.country || '—') + '</td>' +
+      '<td><select class="tbl-input partner-manager" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()" onchange="updatePartnerAccess(this)">' + managers + '</select></td>' +
+      '<td><select class="tbl-input partner-role" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()" onchange="updatePartnerAccess(this)">' +
+//MODE:end
       ['user','admin','super_admin'].map(function(role) { return '<option value="' + role + '"' + (u.role === role ? ' selected' : '') + '>' + role + '</option>'; }).join('') +
+//MODE:cluster
       '</select></td><td>' + (u.active ? 'active' : 'inactive') + '</td></tr>';
+//MODE:end
+//MODE:standalone
+      '</select></td><td>' + (u.active ? 'active' : 'inactive') + '</td><td><button type="button" class="btn btn-outline" onclick="event.stopPropagation();if(window.editManagedUser)editManagedUser('+partnerUsersAll.indexOf(u)+')" onkeydown="event.stopPropagation()">Edit</button></td></tr>';
+//MODE:end
   });
   html += '</tbody></table>';
   document.getElementById('partner-users-list').innerHTML = html;
@@ -3131,11 +4014,19 @@ function renderPartnerUsers() {
 function openPartnerDetails(index) {
   var u=partnerUsersAll[index]; if(!u)return;
   var t=u.tags||{}, name=((t.first_name||'')+' '+(t.last_name||'')).trim()||t.email||u.user_id;
+//MODE:cluster
   var rows=[['role',u.role||'user'],['active',String(u.active)],['manager_user_id',u.manager_user_id||'']];
+//MODE:end
+//MODE:standalone
+  var rows=[['login',(u.logins||[]).join(', ')],['role',u.role||'user'],['active',String(u.active)],['manager_user_id',u.manager_user_id||'']];
+//MODE:end
   Object.keys(t).sort().forEach(function(k){rows.push([k,typeof t[k]==='object'?JSON.stringify(t[k]):t[k]]);});
   document.getElementById('partner-detail-title').innerHTML=countryFlag(t.country)+esc(name);
   document.getElementById('partner-detail-body').innerHTML='<div class="partner-detail-grid">'+rows.map(function(r){return '<div class="partner-detail-key">'+esc(r[0])+'</div><div class="partner-detail-value">'+esc(r[1])+'</div>';}).join('')+'</div>';
   document.getElementById('partner-detail-ov').classList.add('show');
+//MODE:standalone
+  if(window.loadManagedUserKeys)window.loadManagedUserKeys(u);
+//MODE:end
 }
 function closePartnerDetails(){document.getElementById('partner-detail-ov').classList.remove('show')}
 function updatePartnerAccess(select) {
@@ -3230,7 +4121,12 @@ function renderPeople() {
       '<td><input class="tbl-input" style="min-width:170px" value="' + esc(p.email || '') + '" placeholder="fill in…" onchange="setPersonField(\'' + jsq(p.slug) + '\',\'email\',this.value)"></td>' +
       '<td>' + login + '</td>' +
       '<td>' + (p.reports || '') + '</td>' +
+//MODE:cluster
       '<td style="white-space:nowrap">' + viewas + ' <button class="btn btn-outline" style="padding:3px 10px;font-size:9px" onclick="openInviteFor(\'' + jsq(p.slug) + '\')">Invite</button></td>' +
+//MODE:end
+//MODE:standalone
+      '<td style="white-space:nowrap">' + viewas + '</td>' +
+//MODE:end
       '</tr>';
   });
   html += '</tbody></table></div>';
@@ -3305,6 +4201,11 @@ function loadPolicies() {
 
 /* ================================================================
    Platform tab: Subscriptions
+//MODE:standalone
+   Cluster/OpenShift-only, dead code in standalone mode: no route serves
+   /api/v1/admin/subscriptions and no caller reaches this function. Kept
+   for the shared lineage with the cluster admin page.
+//MODE:end
    ================================================================ */
 function loadSubscriptions() {
   var body = document.getElementById('subs-body');
@@ -3543,10 +4444,12 @@ function submitAddUser() {
 
   updateJSON('/api/v1/admin/people', 'POST', person).then(function(created) {
     document.getElementById('addUserAddedMsg').innerHTML = '<strong>' + esc(created.full_name) + '</strong> was added to the directory.';
+//MODE:cluster
     document.getElementById('addUserInviteBtn').onclick = function() {
       document.getElementById('addUserModal').classList.remove('open');
       openInviteFor(created.slug);
     };
+//MODE:end
     document.getElementById('addUserForm').style.display = 'none';
     document.getElementById('addUserSuccess').style.display = '';
     showToast('User added', 'success');
@@ -3661,6 +4564,9 @@ function execConfirm() {
 <script>
 /* Header identity (post MaaS-key auth) + "My view as user" target. */
 fetch("/whoami").then(function(r){return r.json()}).then(function(d){
+//MODE:standalone
+  if(d.managementEnabled){document.getElementById("legacy-routing").style.display="none";}
+//MODE:end
   var el=document.getElementById("abUser");
   if(d.user&&el){
     var name=d.display_name?d.display_name:d.user;
@@ -3727,5 +4633,11 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePricing
     window.addEventListener('storage',function(e){if(e.key===KEY)apply(e.newValue==='1')});
   };
 })();
+//MODE:cluster
 </script></body>
+<!--MODE:end-->
+<!--MODE:standalone-->
+</script><!-- MANAGED_SCRIPT -->
+</body>
+<!--MODE:end-->
 </html>

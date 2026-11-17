@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -11,15 +12,24 @@ import (
 
 func (s *Store) GetPricingDiscountPolicy(ctx context.Context) (pricing.DiscountPolicy, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT rules FROM pricing_discount_policy WHERE id = true`).Scan(&raw)
-	if err == sql.ErrNoRows || len(raw) == 0 {
+	var version string
+	err := s.db.QueryRowContext(ctx, `SELECT version, rules FROM pricing_discount_policy WHERE id = true`).Scan(&version, &raw)
+	if err == sql.ErrNoRows {
 		return pricing.DefaultDiscountPolicy(), nil
 	}
 	if err != nil {
 		return pricing.DiscountPolicy{}, err
 	}
 	var policy pricing.DiscountPolicy
-	if err := json.Unmarshal(raw, &policy); err != nil {
+	var decodeErr error
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		policy.Version = version
+		decodeErr = json.Unmarshal(raw, &policy.Rules)
+	} else {
+		decodeErr = json.Unmarshal(raw, &policy)
+	}
+	if err := decodeErr; err != nil {
 		return pricing.DiscountPolicy{}, fmt.Errorf("decode discount policy: %w", err)
 	}
 	if err := pricing.ValidateDiscountPolicy(policy); err != nil {
@@ -32,7 +42,15 @@ func (s *Store) UpdatePricingDiscountPolicy(ctx context.Context, actor string, p
 	if err := pricing.ValidateDiscountPolicy(policy); err != nil {
 		return err
 	}
-	rules, err := json.Marshal(policy)
+	// The rules column carries a bare JSON array — its CHECK constraint
+	// (jsonb_typeof(rules) = 'array') rejects any other shape, so the full
+	// policy object cannot be stored here. Normalize absent rules to [] so a
+	// rules-less policy never persists as JSON null, which both violates the
+	// constraint and cannot be round-tripped by the reader.
+	if policy.Rules == nil {
+		policy.Rules = []pricing.DiscountRule{}
+	}
+	rules, err := json.Marshal(policy.Rules)
 	if err != nil {
 		return err
 	}

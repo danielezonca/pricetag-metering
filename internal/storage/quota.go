@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -279,10 +280,18 @@ func (s *Store) UpsertQuotaOverride(ctx context.Context, actor, scope, principal
 	if principal == "" {
 		return fmt.Errorf("principal required")
 	}
-	if monthlyUSD <= 0 {
+	if math.IsNaN(monthlyUSD) || math.IsInf(monthlyUSD, 0) || monthlyUSD <= 0 {
 		return fmt.Errorf("monthly_usd must be > 0 (delete the override to fall back to the default)")
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	// The override and its audit record commit together, like
+	// UpdateQuotaPolicy: a failure leaves both unwritten and the quota
+	// cache unchanged instead of persisting an unaudited override.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO quota_overrides (scope, principal, monthly_usd, updated_by)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (scope, principal) DO UPDATE SET
@@ -292,7 +301,10 @@ func (s *Store) UpsertQuotaOverride(ctx context.Context, actor, scope, principal
 		scope, principal, monthlyUSD, actor); err != nil {
 		return err
 	}
-	if err := s.Audit(ctx, actor, "quota.override_set", scope+":"+principal, map[string]any{"monthly_usd": monthlyUSD}); err != nil {
+	if err := s.auditTx(ctx, tx, actor, "quota.override_set", scope+":"+principal, map[string]any{"monthly_usd": monthlyUSD}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	s.invalidateQuotaCache()
@@ -300,11 +312,22 @@ func (s *Store) UpsertQuotaOverride(ctx context.Context, actor, scope, principal
 }
 
 func (s *Store) DeleteQuotaOverride(ctx context.Context, actor, scope, principal string) error {
-	if _, err := s.db.ExecContext(ctx,
+	// Same transactional shape as UpsertQuotaOverride: the deletion and its
+	// audit record commit together, and the cache is invalidated only after
+	// a successful commit.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM quota_overrides WHERE scope = $1 AND principal = $2`, scope, principal); err != nil {
 		return err
 	}
-	if err := s.Audit(ctx, actor, "quota.override_delete", scope+":"+principal, nil); err != nil {
+	if err := s.auditTx(ctx, tx, actor, "quota.override_delete", scope+":"+principal, nil); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	s.invalidateQuotaCache()
@@ -638,6 +661,11 @@ func (s *Store) quotaDecision(ctx context.Context, username string, exempt bool)
 		}
 	}
 
+	// User-scope override principals are stored lowercased (the management
+	// handler normalizes its subjects), so match the caller's username
+	// case-insensitively: a mixed-case login must still pick up its budget.
+	// Lowercase usernames — every other writer and reader of this table —
+	// match identically with or without the LOWER().
 	var userOv, defaultUSD float64
 	var userTokenOv, defaultTokens int64
 	err = s.db.QueryRowContext(ctx, `
@@ -649,7 +677,7 @@ func (s *Store) quotaDecision(ctx context.Context, username string, exempt bool)
 			date_trunc('month', NOW()) + interval '1 month'
 		FROM (SELECT default_monthly_usd, default_monthly_tokens, enforced, allowed_over_limit_models
 			FROM quota_policy WHERE id = true) pol
-		LEFT JOIN quota_overrides ou ON ou.scope = 'user' AND ou.principal = $1
+		LEFT JOIN quota_overrides ou ON ou.scope = 'user' AND ou.principal = LOWER($1)
 		LEFT JOIN quota_token_overrides tou ON tou.scope = 'user' AND tou.principal = $1`,
 		username,
 	).Scan(&defaultUSD, &defaultTokens, &d.Enforced, pq.Array(&d.OverLimitModels),
@@ -770,12 +798,13 @@ func (s *Store) quotaDecision(ctx context.Context, username string, exempt bool)
 func (s *Store) zeroCostModelList(ctx context.Context) ([]string, error) {
 	now := time.Now()
 	s.zeroCostMu.RLock()
-	if now.Before(s.zeroCostExpires) {
-		models := append([]string(nil), s.zeroCostModels...)
-		s.zeroCostMu.RUnlock()
-		return models, nil
-	}
+	cached := now.Before(s.zeroCostExpires)
+	cachedModels := append([]string(nil), s.zeroCostModels...)
+	epoch := s.zeroCostEpoch
 	s.zeroCostMu.RUnlock()
+	if cached {
+		return cachedModels, nil
+	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT model FROM model_pricing
@@ -797,8 +826,14 @@ func (s *Store) zeroCostModelList(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	s.zeroCostMu.Lock()
-	s.zeroCostModels = models
-	s.zeroCostExpires = now.Add(zeroCostCacheTTL)
+	// A rate change can commit while this query runs: memoizing the
+	// pre-commit answer would keep serving stale rates for the full TTL.
+	// Every committed rate change bumps the epoch, so a mismatch discards
+	// the memoization — the computed list still reaches this caller.
+	if s.zeroCostEpoch == epoch {
+		s.zeroCostModels = models
+		s.zeroCostExpires = now.Add(zeroCostCacheTTL)
+	}
 	s.zeroCostMu.Unlock()
 	return models, nil
 }
@@ -854,6 +889,7 @@ func (s *Store) QuotaDecisionCached(ctx context.Context, username string, exempt
 	}
 	s.quotaMu.Lock()
 	e, ok := s.quotaCache[key]
+	gen := s.quotaGen
 	s.quotaMu.Unlock()
 	if ok && time.Now().Before(e.expires) {
 		return e.decision, true, nil
@@ -863,6 +899,13 @@ func (s *Store) QuotaDecisionCached(ctx context.Context, username string, exempt
 		return d, false, err
 	}
 	s.quotaMu.Lock()
+	// An invalidation ran after this read began, so d may predate a
+	// committed change (for example a rate change that just made a model
+	// paid): return it this once but do not cache a stale decision.
+	if s.quotaGen != gen {
+		s.quotaMu.Unlock()
+		return d, false, nil
+	}
 	if s.quotaCache == nil {
 		s.quotaCache = map[string]quotaCacheEntry{}
 	}
@@ -873,6 +916,7 @@ func (s *Store) QuotaDecisionCached(ctx context.Context, username string, exempt
 
 func (s *Store) invalidateQuotaCache() {
 	s.quotaMu.Lock()
+	s.quotaGen++
 	s.quotaCache = nil
 	s.quotaMu.Unlock()
 }

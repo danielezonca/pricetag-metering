@@ -9,10 +9,7 @@ import (
 // source-level guards for the behavior that has no browser test harness in
 // this repository. The backend no-key scope guard has its own unit tests.
 func TestManagerPickerReviewGuards(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
 		"const TEAM_SEARCH_LIMIT=200;",
 		"ranked.slice(0,TEAM_SEARCH_LIMIT)",
@@ -31,10 +28,7 @@ func TestManagerPickerReviewGuards(t *testing.T) {
 }
 
 func TestManagerDemoModeHidesActualSpend(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
 		"Demo mode · costs hidden",
 		".demo-private .demo-cost{display:none!important}",
@@ -51,10 +45,7 @@ func TestManagerDemoModeHidesActualSpend(t *testing.T) {
 }
 
 func TestManagerTimelineRanksByUsage(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
 		"const ranked=[...totals.entries()].filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);",
 		"const top=ranked.slice(0,7).map(([n])=>n);",

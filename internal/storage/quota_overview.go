@@ -61,6 +61,7 @@ func (s *Store) ListUsersOverLimit(ctx context.Context, tenantID, query string, 
 		       subject_id, budget_source, limit_usd, spent_usd, last_at
 		FROM base
 		WHERE spent_usd >= limit_usd
+		  AND limit_usd > 0
 		  AND ($2 = '' OR full_name ILIKE '%' || $2 || '%'
 		       OR email ILIKE '%' || $2 || '%'
 		       OR username ILIKE '%' || $2 || '%'
@@ -105,6 +106,7 @@ func (s *Store) ListUsersOverLimit(ctx context.Context, tenantID, query string, 
 		SELECT COUNT(*)
 		FROM base
 		WHERE spent_usd >= limit_usd
+		  AND limit_usd > 0
 		  AND ($2 = '' OR full_name ILIKE '%' || $2 || '%'
 		       OR email ILIKE '%' || $2 || '%'
 		       OR username ILIKE '%' || $2 || '%'
@@ -125,6 +127,56 @@ func (s *Store) ListUsersOverLimit(ctx context.Context, tenantID, query string, 
 		Enforced:    enforced,
 		GeneratedAt: time.Now().UTC(),
 	}, nil
+}
+
+// roleBudgetCreditsCTE returns the subject-scoped role-budget and
+// active-credit CTEs shared by the over-limit overview and the managed org
+// usage report. Both reports must compose quotas exactly like quotaDecision:
+// role budgets are additive across active (non-retired) roles with the
+// default role excluded where it is explicitly assigned, temporary credits
+// count only while unexpired, and a positive role budget replaces the global
+// default. tenant is the placeholder string (e.g. "$1") carrying the tenant
+// id in the embedding query.
+func roleBudgetCreditsCTE(tenant string) string {
+	return fmt.Sprintf(`
+		subjects AS (
+			SELECT ps.external_id::uuid AS user_id, ps.subject_id
+			FROM policy_subjects ps
+			WHERE ps.tenant_id = %[1]s AND ps.principal_type = 'partner_user'
+		),
+		role_rows AS (
+			SELECT sb.subject_id, r.name, r.monthly_usd
+			FROM subjects sb
+			JOIN model_access_roles r
+			  ON r.tenant_id = %[1]s AND r.is_default AND r.retired_at IS NULL
+			WHERE NOT EXISTS (
+				SELECT 1 FROM model_access_default_exclusions e
+				WHERE e.tenant_id = %[1]s AND e.subject_id = sb.subject_id
+				  AND (e.expires_at IS NULL OR e.expires_at > NOW())
+			)
+			  AND NOT EXISTS (
+				SELECT 1 FROM model_access_role_assignments a
+				WHERE a.tenant_id = %[1]s AND a.role_id = r.role_id AND a.subject_id = sb.subject_id
+			)
+			UNION ALL
+			SELECT a.subject_id, r.name, r.monthly_usd
+			FROM model_access_role_assignments a
+			JOIN model_access_roles r
+			  ON r.role_id = a.role_id AND r.tenant_id = a.tenant_id
+			WHERE a.tenant_id = %[1]s AND r.retired_at IS NULL
+		),
+		role_budget AS (
+			SELECT subject_id, SUM(monthly_usd) AS usd,
+			       array_agg(name ORDER BY name) AS roles
+			FROM role_rows
+			GROUP BY subject_id
+		),
+		credits AS (
+			SELECT subject_id, SUM(amount_usd) AS usd
+			FROM quota_credits
+			WHERE tenant_id = %[1]s AND (expires_at IS NULL OR expires_at > NOW())
+			GROUP BY subject_id
+		)`, tenant)
 }
 
 // overLimitCTE builds the shared per-person budget/spend CTE. The spend
@@ -150,44 +202,7 @@ func (s *Store) overLimitCTE() string {
 			) cl ON true
 			WHERE pu.active
 		),
-		subjects AS (
-			SELECT ps.external_id::uuid AS user_id, ps.subject_id
-			FROM policy_subjects ps
-			WHERE ps.tenant_id = $1 AND ps.principal_type = 'partner_user'
-		),
-		role_rows AS (
-			SELECT sb.subject_id, r.name, r.monthly_usd
-			FROM subjects sb
-			JOIN model_access_roles r
-			  ON r.tenant_id = $1 AND r.is_default AND r.retired_at IS NULL
-			WHERE NOT EXISTS (
-				SELECT 1 FROM model_access_default_exclusions e
-				WHERE e.tenant_id = $1 AND e.subject_id = sb.subject_id
-				  AND (e.expires_at IS NULL OR e.expires_at > NOW())
-			)
-			  AND NOT EXISTS (
-				SELECT 1 FROM model_access_role_assignments a
-				WHERE a.tenant_id = $1 AND a.role_id = r.role_id AND a.subject_id = sb.subject_id
-			)
-			UNION ALL
-			SELECT a.subject_id, r.name, r.monthly_usd
-			FROM model_access_role_assignments a
-			JOIN model_access_roles r
-			  ON r.role_id = a.role_id AND r.tenant_id = a.tenant_id
-			WHERE a.tenant_id = $1 AND r.retired_at IS NULL
-		),
-		role_budget AS (
-			SELECT subject_id, SUM(monthly_usd) AS usd,
-			       array_agg(name ORDER BY name) AS roles
-			FROM role_rows
-			GROUP BY subject_id
-		),
-		credits AS (
-			SELECT subject_id, SUM(amount_usd) AS usd
-			FROM quota_credits
-			WHERE tenant_id = $1 AND (expires_at IS NULL OR expires_at > NOW())
-			GROUP BY subject_id
-		),
+		%s,
 		%s,
 		base AS (
 			SELECT p.user_id, p.full_name, p.email, p.cost_center, p.username,
@@ -209,12 +224,15 @@ func (s *Store) overLimitCTE() string {
 			LEFT JOIN subjects sb ON sb.user_id = p.user_id
 			LEFT JOIN role_budget rb ON rb.subject_id = sb.subject_id
 			LEFT JOIN credits cr ON cr.subject_id = sb.subject_id
+			-- User-scope override principals are stored lowercased (the
+			-- management handler normalizes its subjects); compare against the
+			-- normalized login so reports match the enforcement join.
 			LEFT JOIN quota_overrides ov
-			  ON ov.scope = 'user' AND ov.principal = p.username
+			  ON ov.scope = 'user' AND ov.principal = LOWER(p.username)
 			CROSS JOIN pol
 			LEFT JOIN spend sp ON sp.user_id = p.user_id
 		)`,
-		partnerFullNameExpr, s.overLimitSpendCTE())
+		partnerFullNameExpr, roleBudgetCreditsCTE("$1"), s.overLimitSpendCTE())
 }
 
 func (s *Store) overLimitSpendCTE() string {

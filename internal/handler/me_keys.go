@@ -3,14 +3,18 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/redhat-et/pricetag-metering/internal/config"
 	"github.com/redhat-et/pricetag-metering/internal/maasapi"
 	"github.com/redhat-et/pricetag-metering/internal/metrics"
+	"github.com/redhat-et/pricetag-metering/internal/storage"
 )
 
 // Self-service key endpoints. They are deliberately separate from
@@ -19,6 +23,9 @@ import (
 // else. The MaaS identity headers come from that derived identity.
 
 func (h *AdminHandler) HandleMyKeys(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.StandaloneManagement() {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	if h.maasClient == nil {
 		http.Error(w, "key service is not configured", http.StatusServiceUnavailable)
 		return
@@ -55,6 +62,32 @@ func (h *AdminHandler) myKeyIdentity(w http.ResponseWriter, r *http.Request) (us
 	if username == "" {
 		http.Error(w, "who are you?", http.StatusUnauthorized)
 		return "", "", nil, false
+	}
+	if h.cfg.StandaloneManagement() {
+		// Standalone keys always use the operator-configured unprivileged
+		// group, never a stale administrator group from the browser session.
+		if h.store == nil || h.cfg.PartnerUserKeyGroup == "" {
+			http.Error(w, "personal key management unavailable", http.StatusServiceUnavailable)
+			return "", "", nil, false
+		}
+		profile, err := h.store.PartnerUserByMaaSUsername(r.Context(), username)
+		switch {
+		case errors.Is(err, storage.ErrPartnerUserNotFound):
+			http.Error(w, "active account required", http.StatusForbidden)
+			return "", "", nil, false
+		case err != nil:
+			// A directory outage is not a verdict about the caller: answer
+			// 503, like the current-user check in RequireAuth, instead of
+			// presenting the caller's own account as inactive.
+			http.Error(w, "account directory unavailable", http.StatusServiceUnavailable)
+			return "", "", nil, false
+		}
+		if !profile.Active || profile.KeyRevocationPending {
+			http.Error(w, "active account required", http.StatusForbidden)
+			return "", "", nil, false
+		}
+		group = h.cfg.PartnerUserKeyGroup
+		return username, group, []string{group}, true
 	}
 	groups = NormalizeGroups(sessionGroups(r, h.cfg))
 	if len(groups) == 0 {
@@ -124,7 +157,16 @@ func (h *AdminHandler) myKeysList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load your keys", http.StatusBadGateway)
 		return
 	}
-	if keys == nil {
+	if h.cfg.StandaloneManagement() {
+		owned := []maasapi.APIKeyResponse{}
+		for _, key := range keys {
+			if strings.EqualFold(key.Username, username) {
+				key.Key = ""
+				owned = append(owned, key)
+			}
+		}
+		keys = owned
+	} else if keys == nil {
 		keys = []maasapi.APIKeyResponse{}
 	}
 	writeJSON(w, map[string]any{"data": keys})
@@ -140,11 +182,22 @@ func (h *AdminHandler) myKeysCreate(w http.ResponseWriter, r *http.Request) {
 		Group     string `json:"group"`
 		ExpiresIn string `json:"expiresIn"`
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
+	var dec *json.Decoder
+	if h.cfg.StandaloneManagement() {
+		dec = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	} else {
+		dec = json.NewDecoder(io.LimitReader(r.Body, 16<<10))
+	}
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
+	}
+	if h.cfg.StandaloneManagement() {
+		if dec.Decode(new(any)) != io.EOF {
+			http.Error(w, "expected one JSON object", http.StatusBadRequest)
+			return
+		}
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	if body.Name == "" || len(body.Name) > 64 {
@@ -181,32 +234,151 @@ func (h *AdminHandler) myKeysCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not create the key; try again", http.StatusBadGateway)
 		return
 	}
+	// A 2xx create that omits the key id would leave standalone mode holding
+	// a credential it cannot record, revoke, or reconcile by id. Fail the
+	// mint instead of persisting an unaddressable reference; cluster mode
+	// passes the response through unchanged, matching the pre-standalone
+	// behavior.
+	if h.cfg.StandaloneManagement() && strings.TrimSpace(result.ID) == "" {
+		slog.Error("self-service key create returned no key id", "user", username)
+		http.Error(w, "created key is missing its identifier; contact an administrator", http.StatusBadGateway)
+		return
+	}
+	// A 2xx create that returns an id but not the one-time key leaves the
+	// user with a credential nobody can ever use, and a record of it would
+	// outlive the dismissal. Revoke by the returned id and fail the mint —
+	// the same gate the management issuance applies. A failed cleanup
+	// leaves a live key with no record, which the operator must reconcile.
+	if h.cfg.StandaloneManagement() && strings.TrimSpace(result.Key) == "" {
+		slog.Error("self-service key create returned no one-time key; revoking", "user", username, "key_id", result.ID)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		defer cancel()
+		status, revokeErr := h.maasClient.RevokeUserAPIKey(cleanupCtx, result.ID, username, group)
+		if revokeErr != nil || status < 200 || status > 299 {
+			slog.Error("post-mint revocation failed; operator reconciliation required",
+				"user", username, "key_id", result.ID, "status", status, "error", revokeErr)
+			http.Error(w, "created key is unusable and could not be revoked; contact an administrator", http.StatusBadGateway)
+			return
+		}
+		http.Error(w, "created key is unusable; it was revoked", http.StatusBadGateway)
+		return
+	}
 	metrics.KeysMintedTotal.Inc()
+	// The post-mint recheck is standalone-only: cluster mode keeps the
+	// pre-standalone behavior of minting with no directory lookup afterward,
+	// so a cluster mint is never revoked or rejected because of
+	// partner-record state (docs/deployment-modes.md).
+	if h.cfg.StandaloneManagement() && h.store != nil {
+		// The identity check above does not lock the account; a deactivation
+		// can commit while the mint is in flight. Re-check and revoke a key
+		// that slipped past the revocation sweep rather than hand out a live
+		// credential. This fails closed: an unreadable account state revokes
+		// a freshly minted key the caller can simply re-request. The
+		// state-returning lookup keeps deactivated and revocation-pending
+		// accounts distinguishable from absent ones, so the no-record
+		// exception below can never cover them.
+		profile, err := h.store.ManagedUserByLogin(r.Context(), username)
+		noRecord := errors.Is(err, storage.ErrPartnerUserNotFound)
+		lookupFailed := err != nil && !noRecord
+		var recordErr error
+		if err == nil && profile.Active && !profile.KeyRevocationPending {
+			recordErr = h.store.RecordPartnerUserKey(r.Context(), username, profile.UserID, result.ID, strings.ToLower(strings.TrimSpace(username)), body.Name)
+		}
+		if lookupFailed || noRecord ||
+			(!noRecord && (!profile.Active || profile.KeyRevocationPending || errors.Is(recordErr, storage.ErrPartnerUserInactive))) {
+			// The response must not claim a revocation that did not happen:
+			// a failed cleanup leaves a live key with no local record, which
+			// is exactly what the operator must reconcile.
+			outcome := "key revoked"
+			if result.ID != "" {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+				defer cancel()
+				status, revokeErr := h.maasClient.RevokeUserAPIKey(cleanupCtx, result.ID, username, group)
+				if revokeErr != nil || status < 200 || status > 299 {
+					outcome = "key revocation failed; operator reconciliation required"
+					slog.Error("post-mint revocation failed; operator reconciliation required",
+						"user", username, "key_id", result.ID, "status", status, "error", revokeErr)
+				}
+			}
+			if lookupFailed {
+				http.Error(w, "could not verify account state; "+outcome, http.StatusInternalServerError)
+			} else {
+				http.Error(w, "account is no longer active; "+outcome, http.StatusForbidden)
+			}
+			return
+		}
+		if recordErr != nil {
+			outcome := "it was revoked"
+			if result.ID != "" {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+				defer cancel()
+				status, revokeErr := h.maasClient.RevokeUserAPIKey(cleanupCtx, result.ID, username, group)
+				if revokeErr != nil || status < 200 || status > 299 {
+					outcome = "its revocation failed; operator reconciliation required"
+					slog.Error("post-mint key recording failed; operator reconciliation required",
+						"user", username, "key_id", result.ID, "status", status, "error", revokeErr)
+				}
+			}
+			http.Error(w, "could not record the new key; "+outcome, http.StatusInternalServerError)
+			return
+		}
+	}
 	writeJSON(w, result)
 }
 
 // validatedExpiry enforces the deployment's key-expiry policy. The request
 // may omit expiresIn (deployment default), or send a Go duration string.
 func (h *AdminHandler) validatedExpiry(raw string) (string, error) {
+	return validateKeyExpiry(h.cfg, raw)
+}
+
+// validateKeyExpiry is dependency-free so management endpoints can enforce
+// the same policy without constructing an AdminHandler. Overflowing the
+// configured maximum into a negative time.Duration would silently disable
+// the cap, so the conversion saturates instead.
+func validateKeyExpiry(cfg config.Config, raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.EqualFold(raw, "default") {
-		hours := h.cfg.KeyPolicy.DefaultExpiryHours
+		hours := cfg.KeyPolicy.DefaultExpiryHours
 		if hours <= 0 {
 			hours = 90 * 24
+		}
+		if cfg.StandaloneManagement() {
+			if cfg.KeyPolicy.MaxExpiryHours > 0 && hours > cfg.KeyPolicy.MaxExpiryHours {
+				return "", errText("default key lifetime exceeds the maximum allowed lifetime")
+			}
+			if hours > int((1<<63-1)/time.Hour) {
+				return "", errText("default key lifetime is too large")
+			}
 		}
 		return (time.Duration(hours) * time.Hour).String(), nil
 	}
 	if strings.EqualFold(raw, "none") || raw == "0" {
-		if !h.cfg.KeyPolicy.AllowNoExpiry {
+		if !cfg.KeyPolicy.AllowNoExpiry {
 			return "", errText("keys must expire; choose a duration")
 		}
 		return "", nil
+	}
+	// MaaS and the standalone CLI also accept whole days. Normalize before
+	// applying the same maximum used for native Go durations.
+	if cfg.StandaloneManagement() && strings.HasSuffix(raw, "d") {
+		days, err := strconv.ParseInt(strings.TrimSuffix(raw, "d"), 10, 64)
+		if err != nil || days <= 0 || days > (1<<63-1)/int64(24*time.Hour) {
+			return "", errText("invalid day duration")
+		}
+		raw = (time.Duration(days) * 24 * time.Hour).String()
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil || d <= 0 {
 		return "", errText("expiresIn must be a positive Go duration such as 720h")
 	}
-	max := time.Duration(h.cfg.KeyPolicy.MaxExpiryHours) * time.Hour
+	var max time.Duration
+	if maxHours := cfg.KeyPolicy.MaxExpiryHours; maxHours > 0 {
+		if maxHours > int((1<<63-1)/time.Hour) {
+			maxHours = int((1<<63 - 1) / time.Hour)
+		}
+		max = time.Duration(maxHours) * time.Hour
+	}
 	if max > 0 && d > max {
 		return "", errText("expiresIn exceeds the maximum allowed lifetime")
 	}
@@ -222,6 +394,17 @@ func (h *AdminHandler) myKeysRevoke(w http.ResponseWriter, r *http.Request, keyI
 		http.Error(w, "key id is required", http.StatusBadRequest)
 		return
 	}
+	if h.cfg.StandaloneManagement() {
+		owned, err := h.maasClient.OwnsKey(r.Context(), username, group, keyID)
+		if err != nil {
+			http.Error(w, "could not verify key ownership", http.StatusBadGateway)
+			return
+		}
+		if !owned {
+			http.Error(w, "key not found", http.StatusNotFound)
+			return
+		}
+	}
 	status, err := h.maasClient.RevokeUserAPIKey(r.Context(), keyID, username, group)
 	if err != nil {
 		slog.Error("self-service key revoke failed", "user", username, "error", err)
@@ -234,11 +417,7 @@ func (h *AdminHandler) myKeysRevoke(w http.ResponseWriter, r *http.Request, keyI
 	case http.StatusNoContent, http.StatusOK:
 		w.WriteHeader(http.StatusNoContent)
 	default:
-		if status >= 400 {
-			http.Error(w, "could not revoke the key", http.StatusBadGateway)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		http.Error(w, "could not revoke the key", http.StatusBadGateway)
 	}
 }
 

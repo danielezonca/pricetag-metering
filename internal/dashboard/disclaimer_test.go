@@ -31,10 +31,7 @@ func TestUsagePagesStateEnMaaSScope(t *testing.T) {
 			},
 		},
 	} {
-		data, err := FS.ReadFile(tc.file)
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := readMode(t, tc.file, false)
 		if !bytes.Contains(data, []byte(tc.want)) {
 			t.Errorf("%s: scope disclaimer missing %q", tc.file, tc.want)
 		}

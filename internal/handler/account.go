@@ -27,11 +27,38 @@ func (h *AccountHandler) ServeAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "page not found", http.StatusInternalServerError)
 		return
 	}
+	data, err = dashboard.ForMode(data, h.cfg.StandaloneManagement())
+	if err != nil {
+		http.Error(w, "page not available", http.StatusInternalServerError)
+		return
+	}
 	gateway := h.cfg.Welcome.GatewayURL
 	if gateway == "" {
 		gateway = welcomeGatewayFallback
 	}
+	if h.cfg.StandaloneManagement() {
+		controls, err := fs.ReadFile(dashboard.FS, "management-key-controls.js")
+		if err != nil {
+			http.Error(w, "key controls unavailable", 500)
+			return
+		}
+		tables, err := fs.ReadFile(dashboard.FS, "management-table-controls.js")
+		if err != nil {
+			http.Error(w, "table controls unavailable", 500)
+			return
+		}
+		// Fail closed on template drift: a missing marker would silently
+		// serve the standalone account page without key controls.
+		if !strings.Contains(string(data), "/* ACCOUNT_KEY_CONTROLS */") {
+			http.Error(w, "key controls unavailable", 500)
+			return
+		}
+		data = []byte(strings.Replace(string(data), "/* ACCOUNT_KEY_CONTROLS */", string(controls)+"\n"+string(tables), 1))
+	}
 	page := strings.NewReplacer("{{GATEWAY_URL}}", html.EscapeString(gateway)).Replace(string(data))
+	if h.cfg.StandaloneManagement() {
+		page = string(dashboard.WithSessionDialog([]byte(page)))
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write([]byte(page))

@@ -4,9 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EnMaaS</title>
+<!--MODE:cluster-->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+//MODE:end
+//MODE:standalone
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js" integrity="sha384-Ukv1p/xTma6P4/2bY5KzWBw+ydSpXmhCMtyciIQVDJ1RmOxtCYNMF1uXT9T63H67" crossorigin="anonymous"></script>
+//MODE:end
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -241,7 +248,17 @@ tr.clickable{cursor:pointer}
 .user-name{font-weight:600;line-height:1.2}
 .user-mail{font-size:10px;color:var(--text2);margin-top:1px}
 .country-flag{display:inline-block;margin-right:6px;font-size:15px;line-height:1;vertical-align:-1px}
+/*MODE:cluster*/
 #quota-banner,#quota-ov{display:none!important}
+/*MODE:end*/
+/*MODE:standalone*/
+/* Standalone serves quota decisions (whoami carries the quota object), so the
+   over-limit banner must be able to render. The request-a-budget modal and
+   its banner controls stay hidden: standalone does not serve the
+   /api/v1/me/quota/request endpoint they depend on. */
+#quota-ov{display:none!important}
+#quota-banner .pm-open{display:none!important}
+/*MODE:end*/
 @media(max-width:600px){.kpi-row{grid-template-columns:1fr}}
 /* ── Model pricing modal ──────────────────────────────────────────── */
 .pricing-ov{display:none;position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:150;align-items:flex-start;justify-content:center;padding:5vh 16px}
@@ -354,8 +371,14 @@ tr.clickable{cursor:pointer}
 
 <div id="impersonation-banner" style="display:none;align-items:center;gap:10px;background:rgba(210,153,34,.12);border:1px solid #d29922;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:12px">
   <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;font-size:10px;color:#d29922">Viewing as</span>
+<!--MODE:cluster-->
   <b id="impersonated-user"></b>
   <span style="color:var(--text2)">(you are <span id="real-user"></span>)</span>
+<!--MODE:end-->
+<!--MODE:standalone-->
+  <b id="impersonated-user" class="demo-pii"></b>
+  <span style="color:var(--text2)">(you are <span id="real-user" class="demo-pii"></span>)</span>
+<!--MODE:end-->
   <a href="/admin/impersonate" style="margin-left:auto;background:#d29922;color:#1a1a1a;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:700;text-decoration:none">Back to admin view</a>
 </div>
 
@@ -662,7 +685,12 @@ let geoActivityTimer=null, geoActivityTick=0, geoSparkSeq=0;
 // Overview payload of the current refresh; it carries the server-computed
 // "Saved · Hosted Models" KPI (the sum of the user table's saved_usd
 // column), which is what the card shows — no client-side re-derivation.
+//MODE:cluster
 let cachedOverview=null;
+//MODE:end
+//MODE:standalone
+let cachedOverview=null, refreshGeneration=0, refreshPending=false, refreshFingerprint='';
+//MODE:end
 // Range-only (unfiltered) model stats, kept for the observed cache-ratio
 // basis in renderSavings so per-user/group filters don't zero it out.
 let catalogModels=[];
@@ -726,6 +754,22 @@ async function api(path, fresh){
 }
 
 async function refresh(force){
+//MODE:standalone
+  // A 30-second timer tick must not stack a second eleven-fetch round on a
+  // pending one: with a slow backend every superseded round is discarded,
+  // so the display would never update while the requests pile up. Skip
+  // only unforced calls whose query is exactly the one already in flight —
+  // an operator adjusting the range or filters changes the fingerprint and
+  // still supersedes immediately, as does the Refresh button's force. The
+  // pending flag tracks only the current generation, so a superseded
+  // round's settle cannot keep skipping ticks after a newer refresh
+  // completed.
+  const fingerprint=[range,customFrom,customTo,userFilter.join(','),groupFilter,modelFilter,savingsRef].join('|');
+  if(!force&&refreshPending&&fingerprint===refreshFingerprint)return;
+  refreshFingerprint=fingerprint;
+  const generation=++refreshGeneration;
+  refreshPending=true;
+//MODE:end
   var refreshBtn=document.getElementById('refresh-btn');
   if(force&&refreshBtn){refreshBtn.disabled=true;refreshBtn.textContent='Refreshing…';}
   var r=range;
@@ -753,6 +797,9 @@ async function refresh(force){
        api('/api/v1/dashboard/models?'+rangeOnly,force),
        api('/api/v1/dashboard/directory-users',force)
        ]);
+//MODE:standalone
+  if(generation!==refreshGeneration)return;
+//MODE:end
   cachedOverview=ov;
   cachedGroups=gr;
    cachedModels=modelFilter?mo.filter(function(m){return m.model===modelFilter}):mo;
@@ -780,7 +827,18 @@ async function refresh(force){
   renderSavings();
   renderRecent(rc);
     document.getElementById('last-refresh').textContent=' • '+new Date().toLocaleTimeString();
+//MODE:standalone
+  } catch(error) {
+    if(generation!==refreshGeneration)return;
+    throw error;
+//MODE:end
   } finally {
+//MODE:standalone
+    // Only the settling refresh that still owns the current generation
+    // clears the pending flag: a superseded round must not flip it back
+    // while a newer refresh is in flight.
+    if(generation===refreshGeneration)refreshPending=false;
+//MODE:end
     if(force&&refreshBtn){refreshBtn.disabled=false;refreshBtn.textContent='Refresh';}
   }
 }
@@ -1916,6 +1974,10 @@ document.getElementById('user-metric-toggle').addEventListener('click',e=>{
 
 syncDateInputs();
 setupGeoVisibility();
+//MODE:standalone
+try { if (localStorage.getItem('pricetag-demo-privacy') === '1') document.documentElement.classList.add('demo-private'); } catch (e) {}
+syncDemoMetrics();
+//MODE:end
 refresh();
 setInterval(refresh,30000);
 
@@ -1937,6 +1999,9 @@ fetch('/api/v1/whoami').then(function(r){return r.json()}).then(function(d){
     if(d.isSuperAdmin||d.isManager)document.getElementById('tab-team').style.display='';
     if(isSuperAdmin){
       ['tab-routing','tab-admin'].forEach(function(id){document.getElementById(id).style.display='';});
+//MODE:standalone
+      if(d.managementEnabled)document.getElementById('tab-routing').style.display='none';
+//MODE:end
       var mvb=document.getElementById('my-view-btn');
       mvb.href='/admin/impersonate?as='+encodeURIComponent(d.user);
       mvb.style.display='';

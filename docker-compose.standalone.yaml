@@ -1,0 +1,114 @@
+# Standalone (podman/docker) deployment of the PriceTag metering service.
+#
+# Runs the same image the OpenShift deployment builds, in standalone
+# management mode: no Kubernetes API and no CRDs. The partner directory,
+# admin console, and management API are backed by PostgreSQL; key
+# validation, minting, and revocation go through a MaaS key service.
+#
+# The environment mirrors the full single-server deployment that
+# redhat-et/enmaas-mini generates (scripts/pricetag/prepare.py writes the
+# same variables for its quadlet services), so this file is a faithful
+# minimal version of that deployment rather than a divergent variant:
+#
+# - Metering publishes on 127.0.0.1 only. Remote access belongs behind a
+#   TLS gateway (the full deployment fronts it with praxis-ai at :8443).
+# - M2M ingestion auth is on, matching the gateway-to-metering link.
+# - The management API drives provisioning from the host; accounts are
+#   created there before their users sign in.
+#
+# The MaaS service here is the local development stub with in-memory
+# state. Point KEY_SERVICE_URL and MAAS_VALIDATE_URL at a real key
+# service (for example redhat-et/maas-api in standalone mode) for
+# anything shared.
+#
+# Start:  podman compose -f docker-compose.standalone.yaml up --build
+# Stop:   podman compose -f docker-compose.standalone.yaml down
+# Wipe:   podman compose -f docker-compose.standalone.yaml down -v
+#
+# Secrets default to local-only placeholder values so the stack starts with
+# no setup; they are interpolated from the environment, so override them
+# without editing this file for any environment you do not fully control:
+#
+#   M2M_SHARED_SECRET=$(openssl rand -hex 24) \
+#   SESSION_SECRET=$(openssl rand -hex 24) \
+#   MANAGEMENT_API_SECRET=$(openssl rand -hex 24) \
+#   podman compose -f docker-compose.standalone.yaml up
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: metering
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-metering}
+      POSTGRES_DB: metering
+    volumes:
+      - metering-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metering -d metering"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  maas-api:
+    image: python:3.13-alpine
+    command: ["python", "/app/maas_stub.py"]
+    volumes:
+      # :Z relabels for SELinux-enforcing hosts (rootless podman on Fedora);
+      # it is a harmless no-op on Docker Desktop.
+      - ./tools/local/maas_stub.py:/app/maas_stub.py:ro,Z
+
+  metering-service:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    # podman-compose does not reliably wait on postgres healthchecks, and the
+    # service exits when the database is unreachable at boot; self-heal.
+    restart: unless-stopped
+    environment:
+      DEPLOYMENT_MODE: standalone
+      # Keyword form rather than postgres://: the interpolated password can
+      # contain characters reserved in URL userinfo (@, :, /), which would
+      # break the DSN. lib/pq parses this form identically. Compose cannot
+      # escape the interpolated value, so keep POSTGRES_PASSWORD free of
+      # spaces and quotes; a value that needs them must be single-quoted
+      # here (password='...'), the same way the URL form needs
+      # percent-encoding.
+      DATABASE_URL: host=postgres port=5432 user=metering password=${POSTGRES_PASSWORD:-metering} dbname=metering sslmode=disable
+      # Key service. The stub stands in for a real standalone MaaS
+      # deployment; the headers match what the full deployment sends.
+      KEY_SERVICE_URL: ${KEY_SERVICE_URL:-http://maas-api:8081}
+      KEY_SERVICE_USER_HEADER: X-MaaS-Username
+      KEY_SERVICE_GROUPS_HEADER: X-MaaS-Group
+      MAAS_VALIDATE_URL: ${MAAS_VALIDATE_URL:-http://maas-api:8081/internal/v1/api-keys/validate}
+      # Operator surfaces. MANAGEMENT_PUBLIC_ORIGIN is where browsers reach
+      # this deployment (the gateway origin in the full stack).
+      MANAGEMENT_API_SECRET: ${MANAGEMENT_API_SECRET:-local-only-management-secret}
+      MANAGEMENT_PUBLIC_ORIGIN: ${MANAGEMENT_PUBLIC_ORIGIN:-http://localhost:8080}
+      # Ingestion auth for the gateway link.
+      M2M_AUTH_REQUIRED: "true"
+      M2M_SHARED_SECRET: ${M2M_SHARED_SECRET:-local-only-m2m-secret}
+      # Sessions. Plain HTTP on localhost: browsers treat localhost as a
+      # trustworthy origin either way; non-browser clients cannot send
+      # Secure cookies over http at all. Set true behind TLS.
+      SESSION_SECRET: ${SESSION_SECRET:-local-only-session-secret}
+      SESSION_COOKIE_SECURE: "false"
+      # Standalone key management: every partner key is presented in this
+      # unprivileged MaaS group, and the break-glass list mirrors the full
+      # deployment. Real administration comes from partner_users roles
+      # provisioned through the management API.
+      PARTNER_USER_KEY_GROUP: system:authenticated
+      SUPERADMIN_USERS: admin
+      # Welcome-page links and key lifetime, matching the full deployment.
+      WELCOME_GATEWAY_URL: http://localhost:8080
+      WELCOME_DASHBOARD_URL: http://localhost:8080
+      DEFAULT_KEY_EXPIRY_HOURS: "2160"
+      MAX_KEY_EXPIRY_HOURS: "2160"
+      MONTHLY_TOKEN_QUOTA: "10000000000"
+      TZ: UTC
+    depends_on:
+      postgres:
+        condition: service_healthy
+      maas-api:
+        condition: service_started
+
+volumes:
+  metering-pgdata:

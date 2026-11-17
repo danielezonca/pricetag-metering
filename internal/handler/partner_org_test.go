@@ -1,6 +1,15 @@
 package handler
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+
+	"github.com/redhat-et/pricetag-metering/internal/config"
+	"github.com/redhat-et/pricetag-metering/internal/storage"
+)
 
 func TestOrgChartsUserFilterNoKeyRoot(t *testing.T) {
 	tests := []struct {
@@ -59,5 +68,68 @@ func TestEmptyOrgChartsResponseIsEmpty(t *testing.T) {
 		len(got.Users) != 0 ||
 		len(got.Timeline) != 0 {
 		t.Fatalf("empty org charts response contains data: %+v", got)
+	}
+}
+
+// The standalone org-usage response must hide blocked-region people from
+// managers exactly like the cluster branch, while super-admins keep the full
+// directory.
+func TestStandaloneOrgUsageHidesBlockedCountries(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL required")
+	}
+	store := openFreshStore(t, dsn)
+	if _, err := store.ProvisionLogin(t.Context(), "test", storage.LoginProvision{Subject: "admin", Role: storage.PartnerRoleSuperAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreatePartnerUser(t.Context(), "test", "21111111-2222-3333-4444-555555555555", map[string]any{
+		"email": "blocked@example.com", "first_name": "Blocked", "last_name": "Person", "country": "XX",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddDashboardBlockedCountry(t.Context(), "test", "XX"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{DeploymentMode: config.DeploymentModeStandalone, UserHeader: "X-User"}
+	h := NewPartnerOrgHandler(store, cfg)
+
+	// The blocked person's own view: their row is hidden from a
+	// non-super-admin caller.
+	r := httptest.NewRequest("GET", "/api/v1/org/usage?range=30d", nil)
+	r.Header.Set("X-User", "blocked@example.com")
+	w := httptest.NewRecorder()
+	h.HandleOrgUsage(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d; blocked-person self view must succeed", w.Code)
+	}
+	var selfRows []storage.ManagedOrgUsageRow
+	if err := json.Unmarshal(w.Body.Bytes(), &selfRows); err != nil {
+		t.Fatal(err)
+	}
+	if len(selfRows) != 0 {
+		t.Fatalf("blocked-region row visible to non-super-admin: %+v", selfRows)
+	}
+
+	// The super-admin's whole-org view keeps the blocked person visible.
+	r = httptest.NewRequest("GET", "/api/v1/org/usage?range=30d", nil)
+	r.Header.Set("X-User", "admin")
+	w = httptest.NewRecorder()
+	h.HandleOrgUsage(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d; super-admin view must succeed", w.Code)
+	}
+	var adminRows []storage.ManagedOrgUsageRow
+	if err := json.Unmarshal(w.Body.Bytes(), &adminRows); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range adminRows {
+		if row.Username == "blocked@example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("super-admin must see the blocked person, got %+v", adminRows)
 	}
 }

@@ -111,6 +111,8 @@ func (s *Store) migrateModelAccess(ctx context.Context) error {
 		`ALTER TABLE model_access_roles ADD COLUMN IF NOT EXISTS monthly_tokens BIGINT NOT NULL DEFAULT 0 CHECK (monthly_tokens >= 0)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS model_access_roles_one_default ON model_access_roles (tenant_id) WHERE is_default AND retired_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS model_access_roles_tenant_idx ON model_access_roles (tenant_id, retired_at)`,
+		`ALTER TABLE model_access_roles ADD COLUMN IF NOT EXISTS create_request_id TEXT`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS model_access_roles_create_request_idx ON model_access_roles (tenant_id, create_request_id) WHERE create_request_id IS NOT NULL`,
 
 		`CREATE TABLE IF NOT EXISTS model_access_role_models (
 			tenant_id UUID NOT NULL,

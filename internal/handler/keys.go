@@ -191,6 +191,9 @@ func (h *KeysHandler) HandleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		// user while an admin is "viewing as", else the caller themselves).
 		"display_name": "",
 	}
+	if h.cfg.StandaloneManagement() {
+		resp["managementEnabled"] = h.cfg.ManagementAPISecret != ""
+	}
 	if h.store != nil && user != "" {
 		if p, err := h.store.GetUserProfile(r.Context(), user); err == nil {
 			resp["display_name"] = p.DisplayName()

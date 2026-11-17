@@ -32,9 +32,13 @@ const (
 )
 
 const (
-	partnerUserMaxTags      = 100
-	partnerUserMaxTagValue  = 2048
-	partnerUserMaxListLimit = 100
+	partnerUserMaxTags     = 100
+	partnerUserMaxTagValue = 2048
+	// Largest page the listings advertise: the management route accepts
+	// {50,100,250,500} and the standalone admin console paginates with
+	// limit=500, so the store must honor every advertised size (the admin
+	// table route additionally clamps to 200).
+	partnerUserMaxListLimit = 500
 )
 
 var (

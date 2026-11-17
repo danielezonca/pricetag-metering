@@ -144,3 +144,102 @@ func TestListUsersOverLimit(t *testing.T) {
 		t.Fatalf("paged result = %#v", page)
 	}
 }
+
+// A mixed-case stored login (SSO directories keep the IdP's spelling) must
+// pick up its lowercased user override in reports exactly like enforcement
+// does (quotaDecision matches LOWER(username)).
+func TestListUsersOverLimitOverrideMatchesMixedCaseLogin(t *testing.T) {
+	s, ctx := openTestStore(t)
+	s.SetMonthSpendEnabled(true)
+	tenant, err := s.EnsureDefaultTenant(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO quota_policy (id, default_monthly_usd, enforced, allowed_over_limit_models)
+		VALUES (true, 999, true, '{}')
+		ON CONFLICT (id) DO UPDATE SET default_monthly_usd=999, enforced=true, allowed_over_limit_models='{}'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateModelAccessRole(ctx, tenant, "admin", "Default", "", nil, true, 300); err != nil {
+		t.Fatal(err)
+	}
+	// CreatePartnerUser stores the email tag as the login verbatim — this is
+	// how mixed-case logins arrive from SSO.
+	const login = "Mixed.Case@Example.com"
+	if _, err := s.CreatePartnerUser(ctx, "test", uuid.NewString(), map[string]any{
+		"email":      login,
+		"first_name": "Mixed",
+		"last_name":  "Case",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SyncPartnerUserSubjects(ctx, tenant); err != nil {
+		t.Fatal(err)
+	}
+	// The management handler stores override principals lowercased.
+	if err := s.UpsertQuotaOverride(ctx, "admin", "user", "mixed.case@example.com", 100); err != nil {
+		t.Fatal(err)
+	}
+	// Month spend is keyed by the stored login spelling.
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO user_month_spend (username, month, spent_usd, tokens, requests)
+		VALUES ($1, date_trunc('month', NOW())::date, 150, 0, 1)
+		ON CONFLICT (username, month) DO UPDATE SET spent_usd=EXCLUDED.spent_usd`,
+		login); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.ListUsersOverLimit(ctx, tenant, "", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *OverLimitUser
+	for i := range page.Users {
+		if page.Users[i].Email == login {
+			found = &page.Users[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("mixed-case user missing from over-limit list: %#v", page.Users)
+	}
+	if found.BudgetSource != "user_override" || found.LimitUSD != 100 || found.SpentUSD != 150 {
+		t.Fatalf("mixed-case override not reflected: %#v", found)
+	}
+}
+
+// A zero default budget means "no USD budget configured", not a zero
+// allowance: with the policy enforced and no budget set, no one may be
+// listed over limit — otherwise spent >= 0 flags every row.
+func TestListUsersOverLimitRequiresPositiveBudget(t *testing.T) {
+	s, ctx := openTestStore(t)
+	s.SetMonthSpendEnabled(true)
+	tenant, err := s.EnsureDefaultTenant(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO quota_policy (id, default_monthly_usd, enforced, allowed_over_limit_models)
+		VALUES (true, 0, true, '{}')
+		ON CONFLICT (id) DO UPDATE SET default_monthly_usd=0, enforced=true, allowed_over_limit_models='{}'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ProvisionLogin(ctx, "test", LoginProvision{Subject: "no-budget", Name: "NoBudget"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SyncPartnerUserSubjects(ctx, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO user_month_spend (username, month, spent_usd, tokens, requests)
+		VALUES ('no-budget', date_trunc('month', NOW())::date, 5, 0, 1)
+		ON CONFLICT (username, month) DO UPDATE SET spent_usd=EXCLUDED.spent_usd`); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.ListUsersOverLimit(ctx, tenant, "", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 0 || len(page.Users) != 0 {
+		t.Fatalf("enforced policy with no budget must not list users over limit: total=%d rows=%d", page.Total, len(page.Users))
+	}
+}

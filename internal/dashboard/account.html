@@ -20,6 +20,9 @@
     --t:#e2e6ec;--t2:#8090a8;--blu:#4da0f8;--grn:#3dcc6e;--org:#eba830;--red:#e8554e;--pur:#a88cf8;--cyn:#38d4c2;
   }
   *{margin:0;padding:0;box-sizing:border-box}
+/*MODE:standalone*/
+  [hidden]{display:none!important}
+/*MODE:end*/
   body{background:var(--bg);color:var(--t);font:13px/1.55 Inter,-apple-system,BlinkMacSystemFont,sans-serif}
   a{color:var(--blu);text-decoration:none}
   .appbar{position:sticky;top:12px;z-index:40;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
@@ -154,6 +157,12 @@
   .btn-danger:hover{background:rgba(232,85,78,.2)}
   .btn-sm{padding:5px 12px;font-size:11px;border-radius:6px}
   .keys-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+/*MODE:standalone*/
+  .keys-head label{display:flex;align-items:center;gap:8px;color:var(--t2);font-size:12px;flex-wrap:wrap}
+  .keys-head input,.keys-head select{background:var(--c2);border:1px solid var(--bdr);color:var(--t);border-radius:7px;padding:8px 10px;max-width:100%;font:inherit}
+  #key-pages button{background:var(--c2);border:1px solid var(--bdr);color:var(--t);border-radius:7px;padding:7px 12px;cursor:pointer}
+  #key-pages button:disabled{opacity:.4;cursor:default}
+/*MODE:end*/
   .overlay{display:none;position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:100;align-items:center;justify-content:center;padding:20px}
   .overlay.show{display:flex}
   .modal{background:var(--c1);border:1px solid var(--bdr);border-radius:14px;width:100%;max-width:520px;padding:24px 26px;box-shadow:0 24px 70px rgba(0,0,0,.6);position:relative;max-height:88vh;overflow:auto}
@@ -222,6 +231,9 @@
 </header>
 
 <main class="pg">
+<!--MODE:standalone-->
+<div id="account-impersonation" class="banner" hidden>Read-only view as <strong id="account-impersonation-name"></strong>. <a href="/admin/impersonate">Return to administrator view</a></div>
+<!--MODE:end-->
   <div class="scope-note" role="note">
     <span class="ico" aria-hidden="true">ⓘ</span>
     <div><b>EnMaaS usage.</b> This page shows the usage recorded by this EnMaaS deployment for you. It does not include other AI tools or platforms; check those tools for their usage and cost.</div>
@@ -366,12 +378,23 @@
           <div class="hint" style="margin-bottom:0">Active, expiring, and revoked keys for your account</div>
         </div>
       </div>
+<!--MODE:standalone-->
+      <div class="keys-head">
+        <label>Search keys <input type="search" id="key-search" maxlength="128" placeholder="Name or key ID"></label>
+        <label>Status <select id="key-state"><option value="active">Active</option><option value="revoked">Revoked</option><option value="expired">Expired</option><option value="all">All</option></select></label>
+        <label>Rows <select id="key-size"><option value="5">5</option><option value="20">20</option><option value="50">50</option></select></label>
+        <button class="btn btn-ghost" id="keys-refresh" type="button">Refresh</button>
+      </div>
+<!--MODE:end-->
       <div class="tbl-wrap">
         <table>
           <thead><tr><th>Name</th><th>Group</th><th>Status</th><th>Created</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
           <tbody id="key-rows"><tr><td colspan="7"><div class="loading"><span class="spinner"></span>Loading keys…</div></td></tr></tbody>
         </table>
       </div>
+<!--MODE:standalone-->
+      <div class="keys-head" id="key-pages"></div>
+<!--MODE:end-->
     </div>
 
   </section>
@@ -387,11 +410,24 @@
       <div class="field"><label for="key-name">Name</label><input id="key-name" maxlength="64" placeholder="e.g. my-laptop-claude-code" autocomplete="off"></div>
       <div class="field"><label for="key-expiry">Expires</label>
         <select id="key-expiry">
+<!--MODE:cluster-->
           <option value="2160h" selected>90 days (default)</option>
+<!--MODE:end-->
+<!--MODE:standalone-->
+          <option value="default" selected>Deployment default</option>
+<!--MODE:end-->
           <option value="720h">30 days</option>
+<!--MODE:cluster-->
           <option value="4320h">180 days</option>
+<!--MODE:end-->
+<!--MODE:standalone-->
+<option value="custom">Custom duration</option>
+<!--MODE:end-->
         </select>
       </div>
+<!--MODE:standalone-->
+      <div class="field" id="custom-expiry-field" hidden><label for="custom-expiry">Duration (for example 24h or 30d)</label><input id="custom-expiry" maxlength="32"></div>
+<!--MODE:end-->
       <div class="warn">⚠ The key is shown once and cannot be retrieved later.</div>
       <div class="err" id="create-err"></div>
       <div class="modal-actions">
@@ -414,6 +450,9 @@
         <strong>Congratulations — you’re ready to use EnMaaS.</strong>
         Start using your key with your local tools. Come back anytime to review your usage in the <a href="/account?tab=usage">My usage tab</a>, or <a href="/welcome" target="_blank" rel="noopener">see how to set up your tools ↗</a>.
       </div>
+<!--MODE:standalone-->
+      <button type="button" class="btn btn-ghost" id="reveal-download">Download .key</button>
+<!--MODE:end-->
       <div class="saved"><input type="checkbox" id="reveal-saved"><label for="reveal-saved">I've saved this key in a safe place</label></div>
       <div class="modal-actions"><button class="btn btn-primary" id="reveal-done" disabled>Done</button></div>
     </div>
@@ -447,7 +486,13 @@
 
 <script>
 (function () {
+//MODE:cluster
   var state = {tab:'usage', range:'mtd', from:'', to:'', keys:[], models:[], overview:null, revokeId:'', animateUsage:true, modelMetric:'cost', splitMetric:'cost', tableSort:{key:'cost',dir:'desc'}};
+//MODE:end
+//MODE:standalone
+  /* ACCOUNT_KEY_CONTROLS */
+  var state = {tab:'usage', range:'mtd', from:'', to:'', keys:[], keyOffset:0, models:[], overview:null, revokeId:'', animateUsage:true, modelMetric:'cost', splitMetric:'cost', tableSort:{key:'cost',dir:'desc'}};
+//MODE:end
   var COLORS = ['#4da0f8','#eba830','#a88cf8','#38d4c2','#e8554e','#f778ba','#b8d94a','#6e7bf2','#b07a48','#ff8c69','#79c0ff','#d2a8ff','#56d4dd','#e3b341','#8090a8'];
 
   function $(id){ return document.getElementById(id); }
@@ -555,6 +600,11 @@
   /* ---------------- identity ---------------- */
   function loadWho(){
     return api('/api/v1/whoami').then(function(d){
+//MODE:standalone
+      state.subject=d.user; state.impersonating=!!d.impersonating;
+      $('create-btn').disabled=state.impersonating;
+      if(state.impersonating){ $('account-impersonation').hidden=false; $('account-impersonation-name').textContent=d.user; }
+//MODE:end
       $('who-name').textContent = d.display_name || d.user || '—';
       var parts=[]; if(d.isSuperAdmin)parts.push('super admin'); else if(d.isAdmin)parts.push('admin');
       if(d.quota && typeof d.quota.limit_usd === 'number' && d.quota.limit_usd>0) parts.push('budget $'+Math.round(d.quota.limit_usd));
@@ -566,7 +616,12 @@
       if(d.isManager || d.isSuperAdmin) $('nav-team').style.display='';
       if(d.isAdmin || d.isSuperAdmin) $('nav-org').style.display='';
       if(d.isSuperAdmin){
+//MODE:cluster
         $('nav-routing').style.display='';
+//MODE:end
+//MODE:standalone
+        if(!d.managementEnabled) $('nav-routing').style.display='';
+//MODE:end
         $('nav-admin').style.display='';
       }
     }).catch(function(){});
@@ -582,7 +637,14 @@
       $('kpi-spend').textContent = preciseMoney(o.total_cost_usd);
       $('kpi-requests').textContent = compact(o.total_requests);
       $('kpi-tokens').textContent = compact(o.total_tokens);
+//MODE:cluster
       if(q && typeof q.limit_usd === 'number' && q.limit_usd>0){
+//MODE:end
+//MODE:standalone
+      if(q && q.exempt){
+        $('kpi-budget').textContent='Exempt'; $('kpi-budget-note').textContent='Administrator — exempt from the USD budget gate'; $('kpi-budget-bar').style.width='0%';
+      } else if(q && typeof q.limit_usd === 'number' && q.limit_usd>0){
+//MODE:end
         var pct = Math.round((q.spent_usd||0)/q.limit_usd*100);
         $('kpi-budget').className = 'kpi-value ' + (pct > 100 ? 'budget-over' : 'budget-ok');
         $('kpi-budget-bar').className = pct > 100 ? 'over' : '';
@@ -732,11 +794,23 @@
     var total=rows.reduce(function(s,r){return s+(r.cost_usd||0);},0);
     $('model-rows').innerHTML=rows.map(function(r){
       var share=total>0?Math.round((r.cost_usd||0)/total*100):0;
+//MODE:cluster
       return '<tr><td>'+modelChip(r.model)+'</td>'+ 
+//MODE:end
+//MODE:standalone
+      return '<tr><td>'+modelChip(r.model)+'</td>'+
+//MODE:end
         '<td><span class="pill '+(r.hosted?'hosted':'frontier')+'">'+(r.hosted?'Hosted':'Frontier')+'</span></td>'+
+//MODE:cluster
         '<td class="num">'+compact(r.requests)+'</td>'+ 
         '<td class="num">'+compact(r.total_tokens)+'</td>'+ 
         '<td class="num">'+preciseMoney(r.cost_usd)+'</td>'+ 
+//MODE:end
+//MODE:standalone
+        '<td class="num">'+compact(r.requests)+'</td>'+
+        '<td class="num">'+compact(r.total_tokens)+'</td>'+
+        '<td class="num">'+preciseMoney(r.cost_usd)+'</td>'+
+//MODE:end
         '<td class="num">'+share+'%</td></tr>';
     }).join('');
   }
@@ -935,18 +1009,41 @@
       $('key-rows').innerHTML='<tr><td colspan="7"><div class="empty"><b>No keys yet</b>Follow the EnMaaS onboarding process to get started. If onboarding is already complete, create a key here.<div style="margin-top:14px"><button class="btn btn-primary" onclick="document.getElementById(\'create-btn\').click()">Create key</button></div></div></td></tr>';
       return;
     }
+//MODE:cluster
     state.keys.sort(function(a,b){ return new Date(b.creationDate||0)-new Date(a.creationDate||0); });
     $('key-rows').innerHTML = state.keys.map(function(k){
+//MODE:end
+//MODE:standalone
+    var filtered=TableControls.filterKeys(state.keys,$('key-search').value,$('key-state').value);
+    var page=TableControls.page(filtered,state.keyOffset,Number($('key-size').value)); state.keyOffset=page.offset;
+    TableControls.pager($('key-pages'),{offset:page.offset,size:Number($('key-size').value),hasMore:page.hasMore,count:filtered.length,onPage:function(offset){state.keyOffset=offset;renderKeys();}});
+    $('key-rows').innerHTML = page.rows.map(function(k){
+//MODE:end
       var st=statusOf(k);
       var label = st==='expiring'?'Expiring soon':st;
+//MODE:cluster
       var action = (st==='active'||st==='expiring') && k.id
+//MODE:end
+//MODE:standalone
+      var action = (st==='active'||st==='expiring') && k.id && !state.impersonating
+//MODE:end
         ? '<button class="btn btn-danger btn-sm" data-revoke="'+esc(k.id)+'" data-name="'+esc(k.name||'')+'">Revoke</button>' : '';
+//MODE:cluster
       return '<tr>'+
+//MODE:end
+//MODE:standalone
+      return '<tr data-key-id="'+esc(k.id)+'">'+
+//MODE:end
         '<td style="font-weight:600">'+esc(k.name||'—')+'</td>'+
         '<td style="color:var(--t2)">'+esc(k.subscription||k.group||'—')+'</td>'+
         '<td><span class="pill '+st+'">'+esc(label)+'</span></td>'+
         '<td style="color:var(--t2)">'+when(k.creationDate||k.created_at)+'</td>'+
+//MODE:cluster
         '<td style="color:var(--t2)">'+dateOnly(k.expirationDate)+'</td>'+
+//MODE:end
+//MODE:standalone
+        '<td style="color:var(--t2)">'+esc(KeyControls.remaining(k))+'</td>'+
+//MODE:end
         '<td style="color:var(--t2)">'+(k.lastUsedAt?when(k.lastUsedAt):'never')+'</td>'+
         '<td style="text-align:right">'+action+'</td></tr>';
     }).join('');
@@ -960,17 +1057,39 @@
     });
   }
 
+//MODE:standalone
+  for(const id of ['key-search','key-state','key-size']) $(id).addEventListener(id==='key-search'?'input':'change',function(){state.keyOffset=0;renderKeys();});
+  $('keys-refresh').onclick=loadKeys;
+  $('key-expiry').onchange=function(){$('custom-expiry-field').hidden=this.value!=='custom';};
+//MODE:end
   $('create-btn').onclick=function(){
+//MODE:standalone
+    if(state.impersonating)return;
+    state.lastKey=''; $('reveal-step').removeAttribute('data-key-id'); $('custom-expiry-field').hidden=true;
+//MODE:end
     $('create-step').className=''; $('reveal-step').className='hidden';
+//MODE:cluster
     $('key-name').value=''; $('key-expiry').value='2160h'; $('create-err').textContent='';
+//MODE:end
+//MODE:standalone
+    $('key-name').value=''; $('key-expiry').value='default'; $('create-err').textContent='';
+//MODE:end
     $('create-overlay').className='overlay show'; $('key-name').focus();
   };
 
   $('create-submit').onclick=function(){
     var name=$('key-name').value.trim();
     if(!name){ $('create-err').textContent='Give the key a name.'; return; }
+//MODE:cluster
     var btn=this; btn.disabled=true;
     api('/api/v1/me/keys',{method:'POST',body:{name:name,expiresIn:$('key-expiry').value}}).then(function(k){
+//MODE:end
+//MODE:standalone
+    var btn=this; if(btn.disabled||state.impersonating)return; btn.disabled=true;
+    api('/api/v1/me/keys',{method:'POST',body:{name:name,expiresIn:$('key-expiry').value==='custom'?$('custom-expiry').value:$('key-expiry').value}}).then(function(k){
+      if(typeof k.key!=='string'||!k.key.trim()||/\s/.test(k.key)) throw new Error('No usable key returned. Check your key list before trying again.');
+      state.lastKeyName=name; $('reveal-step').dataset.keyId=k.id||'';
+//MODE:end
       $('reveal-key').textContent = '••••••••••••••••••••';
       $('reveal-key').dataset.shown = 'false';
       $('reveal-show').textContent = 'Show';
@@ -999,6 +1118,15 @@
       document.execCommand('copy'); ta.remove(); toast('Key copied');
     });
   };
+//MODE:standalone
+  $('reveal-download').onclick=function(){
+    if(!state.lastKey)return;
+    const url=URL.createObjectURL(new Blob([state.lastKey+'\n'],{type:'text/plain'})),link=document.createElement('a');
+    link.href=url;link.download=KeyControls.filename({subject:state.subject,name:state.lastKeyName});
+    try{document.body.append(link);link.click();}finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  };
+  window.addEventListener('pagehide',()=>{state.lastKey='';$('reveal-key').textContent='••••••••••••••••••••';});
+//MODE:end
   $('reveal-done').onclick=function(){
     $('reveal-key').textContent='••••••••••••••••••••';
     $('reveal-key').dataset.shown='false';
@@ -1010,7 +1138,12 @@
   };
 
   $('revoke-confirm').onclick=function(){
+//MODE:cluster
     var btn=this; btn.disabled=true;
+//MODE:end
+//MODE:standalone
+    var btn=this; if(btn.disabled||state.impersonating)return; btn.disabled=true;
+//MODE:end
     api('/api/v1/me/keys/'+encodeURIComponent(state.revokeId),{method:'DELETE'}).then(function(){
       $('revoke-overlay').className='overlay';
       toast('Key revoked'); loadKeys();
@@ -1019,11 +1152,38 @@
   };
 
   /* ---------------- copy / close ---------------- */
+//MODE:standalone
+	  function revealActive(){ return !$('reveal-step').classList.contains('hidden'); }
+//MODE:end
   Array.prototype.forEach.call(document.querySelectorAll('[data-close]'),function(b){
+//MODE:cluster
     b.onclick=function(){ $(b.getAttribute('data-close')).className='overlay'; };
+//MODE:end
+//MODE:standalone
+	    b.onclick=function(){
+	      var id=b.getAttribute('data-close');
+	      // A close while the create POST is pending would hide the overlay
+	      // the response is about to fill: the key would be issued and live
+	      // server-side with its one-time secret never shown. Block both the
+	      // button and the backdrop until the request settles.
+	      if(id==='create-overlay'&&$('create-submit').disabled)return;
+	      if(id==='create-overlay'&&revealActive()&&!$('reveal-saved').checked&&!confirm('This key is shown only once. Close without saving it?'))return;
+	      if(id==='create-overlay')state.lastKey='';
+	      $(id).className='overlay';
+	    };
+//MODE:end
   });
   Array.prototype.forEach.call(document.querySelectorAll('.overlay'),function(o){
+//MODE:cluster
     o.addEventListener('click',function(e){ if(e.target===o) o.className='overlay'; });
+//MODE:end
+//MODE:standalone
+	    o.addEventListener('click',function(e){
+	      if(e.target!==o)return;
+	      if(o.id==='create-overlay'&&(revealActive()||$('create-submit').disabled))return;
+	      o.className='overlay';
+	    });
+//MODE:end
   });
   Array.prototype.forEach.call(document.querySelectorAll('[data-copy]'),function(b){
     b.onclick=function(){ navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function(){toast('Copied');}); };

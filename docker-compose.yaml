@@ -17,7 +17,9 @@ services:
     image: python:3.13-alpine
     command: ["python", "/app/maas_stub.py"]
     volumes:
-      - ./tools/local/maas_stub.py:/app/maas_stub.py:ro
+      # :Z relabels for SELinux-enforcing hosts (rootless podman on Fedora);
+      # it is a harmless no-op on Docker Desktop.
+      - ./tools/local/maas_stub.py:/app/maas_stub.py:ro,Z
     ports:
       - "8081:8081"
 

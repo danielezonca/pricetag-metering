@@ -1,0 +1,272 @@
+<script>
+(function () {
+'use strict';
+/* KEY_CONTROLS */
+const el=id=>document.getElementById(id);
+async function api(path,method='GET',body){const r=await fetch(path,{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const text=await r.text();if(!r.ok)throw new Error(text||('Request failed: HTTP '+r.status));return text?JSON.parse(text):{};}
+const values=form=>Object.fromEntries(new FormData(form));
+function report(fn,notify=true){return async event=>{if(event)event.preventDefault();el('status').textContent='Working…';try{await fn();el('status').textContent='Done';if(notify)showToast('Saved','success');}catch(e){el('status').textContent=e.message;showToast(e.message,'error');}};}
+function bind(id,fn,notify=true){el(id).addEventListener('submit',KeyControls.singleFlight(el(id), report(()=>fn(values(el(id))),notify)));}
+let userActiveBaseline;
+// An edit populated from the directory omits an unchanged active flag: the
+// form value can be stale if the account was suspended elsewhere, and
+// resending it would silently reactivate the user. New users and deliberate
+// status changes still send the selected value.
+bind('user',async body=>{const subject=body.subject;const payload={...body,active:body.active==='true'};if(userActiveBaseline!==undefined&&body.active===userActiveBaseline)delete payload.active;await api('/api/v1/management/users','PUT',payload);if(el('user').elements.subject.value===subject)userActiveBaseline=body.active;await loadUsers();loadPartnerUsers(0);});
+const issuedKey = KeyControls.delivery(el('onboardKey'));
+for (const [selector, action] of [['[data-key-copy]', () => issuedKey.copy()], ['[data-key-download]', () => issuedKey.download()], ['[data-key-clear]', () => issuedKey.clear()]]) {
+ el('onboardKey').querySelector(selector).onclick = report(action);
+}
+window.addEventListener('pagehide', () => issuedKey.clear());
+function updateViewLinks(){const login=el('onboard').elements.subject.value;el('viewUserUsage').href='/admin/impersonate?as='+encodeURIComponent(login);el('viewUserTeam').href='/admin/impersonate?as='+encodeURIComponent(login)+'&to=/manager';}
+el('onboard').elements.subject.addEventListener('change', () => {
+ // Programmatic directory updates never fire change events and the picker
+ // is disabled while an issuance is pending: this clear only runs on a
+ // real operator selection, never against a key just issued.
+ if(el('onboard').elements.subject.disabled)return;
+ issuedKey.clear();updateViewLinks();
+});
+bind('onboard', async body => {
+ issuedKey.clear(); const select=el('onboard').elements.subject;select.disabled=true;
+ try {issuedKey.set(await api('/api/v1/management/keys', 'POST', body), {subject: body.subject, name: body.name});}
+ finally {
+  // Apply the deferred directory before unlocking so a walk that arrived
+  // during issuance is not lost. The picker updates, but the delivery
+  // panel survives even when the login left the directory: the key is
+  // live server-side and its one-time secret is shown only here — the
+  // operator dismisses it explicitly.
+  if(deferredDirectory!==null){applyDirectory(select,deferredDirectory);deferredDirectory=null;}
+  select.disabled=false;
+ }
+});
+window.editManagedUser=index=>{
+ const user=partnerUsersAll[index],login=user&&(user.logins||[])[0];
+ if(!login){showToast('This identity has no managed login.','error');return;}
+ const form=el('user');form.elements.subject.value=login;form.elements.subject.readOnly=true;
+ form.elements.name.value=(user.tags||{}).first_name||login;
+ form.elements.active.value=String(user.active);userActiveBaseline=String(user.active);form.scrollIntoView({block:'center'});form.elements.name.focus();
+};
+el('newUser').onclick=()=>{const form=el('user');form.reset();form.elements.subject.readOnly=false;userActiveBaseline=undefined;form.elements.subject.focus();};
+window.loadManagedUserKeys=async user=>{
+ const login=(user.logins||[])[0],section=document.createElement('section');section.className='managed-controls';
+ const heading=document.createElement('h3');heading.textContent='Active keys';section.append(heading);
+ const filters=document.createElement('form'),searchLabel=document.createElement('label'),search=document.createElement('input'),sizeLabel=document.createElement('label'),size=document.createElement('select');
+ search.type='search';search.className='tbl-input';search.maxLength=128;searchLabel.textContent='Search name or key ID';searchLabel.append(search);
+ size.className='tbl-input';sizeLabel.textContent='Rows';for(const value of [5,20,50]){const option=document.createElement('option');option.value=String(value);option.textContent=String(value);size.append(option);}sizeLabel.append(size);filters.append(searchLabel,sizeLabel);section.append(filters);
+ const content=document.createElement('div');content.style.overflowX='auto';content.textContent='Loading active keys…';section.append(content);
+ const pages=document.createElement('div');pages.className='partner-users-pager';section.append(pages);el('partner-detail-body').append(section);
+ const note=document.createElement('p');note.textContent='Revoking keys disconnects harnesses. Existing browser sessions remain valid; set the user inactive to block all access.';section.append(note);
+ const revoke=document.createElement('button');revoke.type='button';revoke.className='btn btn-red';revoke.textContent='Revoke all keys';revoke.disabled=true;section.append(revoke);
+ let keys=[],offset=0,loaded=false;
+ function render(){
+  if(!loaded)return; // a failed load keeps its error; search/size must not mask it
+  // 'all', not 'active': refresh already excluded revoked and expired keys,
+  // and a key with an unrecognized state may still grant access — dropping
+  // it here would hide it from the very list that can revoke it.
+  const filtered=TableControls.filterKeys(keys,search.value,'all'),page=TableControls.page(filtered,offset,Number(size.value));offset=page.offset;
+  content.replaceChildren();const table=document.createElement('table');table.className='tbl';
+  const head=document.createElement('tr');for(const label of ['Name / key ID','Login','Expires']){const cell=document.createElement('th');cell.textContent=label;head.append(cell);}table.append(head);
+  for(const key of page.rows){const row=document.createElement('tr');for(const value of [(key.name||'Unnamed key')+' · '+key.id,key.username,KeyControls.remaining(key)]){const cell=document.createElement('td');cell.textContent=value||'—';row.append(cell);}table.append(row);}
+  if(page.rows.length)content.append(table);else content.textContent='No matching active keys.';
+  TableControls.pager(pages,{offset,size:Number(size.value),count:filtered.length,hasMore:page.hasMore,onPage:value=>{offset=value;render();}});
+ }
+ const reset=()=>{offset=0;render();};search.oninput=reset;size.onchange=reset;filters.onsubmit=event=>{event.preventDefault();reset();};
+ async function refresh(){
+  revoke.disabled=true;
+  try{
+   const result=await api('/api/v1/admin/partner-users/'+encodeURIComponent(user.user_id)+'/keys');
+   if(!section.isConnected)return;
+   if(!Array.isArray(result.keys))throw new Error('Invalid key list response.');
+   for(const key of result.keys){if(!key||typeof key.id!=='string'||!key.id)throw new Error('Invalid key list response.');}
+   // Keep every key that is not confirmed revoked or expired: a key with an
+   // unrecognized status may still grant access and must stay visible and
+   // revocable here rather than being silently dropped.
+   keys=result.keys.filter(key=>{const state=KeyControls.state(key);return state!=='revoked'&&state!=='expired';});
+   loaded=true;
+   heading.textContent='Active keys ('+keys.length+')';render();
+   revoke.disabled=!login||!keys.length;
+  }catch(error){if(section.isConnected){loaded=false;content.textContent=error.message;const retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Reload';retry.onclick=()=>refresh();content.append(document.createElement('br'),retry);pages.replaceChildren();}}
+ }
+ revoke.onclick=async()=>{
+  if(revoke.disabled)return;
+  if(!window.confirm('Revoke every active key for '+login+'? Their harnesses will lose access.'))return;
+  revoke.disabled=true;
+  try{await api('/api/v1/management/key-revocations','POST',{subject:login,dry_run:false});await refresh();}
+  catch(error){content.textContent=error.message+' Revocation may be partial; retry safely.';revoke.disabled=false;}
+ };
+ await refresh();
+};
+bind('budget',async body=>{
+ // A pending allowance load leaves the amount field disabled and empty; a
+ // save that slips through that window must not send a null or NaN amount
+ // for the newly selected user.
+ const amount=Number(body.monthly_usd);
+ if(body.monthly_usd==null||String(body.monthly_usd).trim()===''||!Number.isFinite(amount))throw new Error('Enter a monthly allowance before saving.');
+ await api('/api/v1/management/budgets','PUT',{subject:body.subject,monthly_usd:amount});
+ // The save has committed: reload the editor before the overrides table so
+ // a table failure cannot leave the editor showing the stale inherited
+ // default with Remove disabled. Keep the subject and draft checks — a
+ // fresh draft must not be clobbered by the post-save reload — and run the
+ // table refresh independently, reporting its failure on its own without
+ // failing the completed save. The value comparison is numeric so
+ // formatting like "9.00" still counts as the submitted value.
+ let failure=null;
+ if(el('budget').elements.subject.value===body.subject&&Number(el('budget').elements.monthly_usd.value)===Number(body.monthly_usd)){try{await loadSelectedBudget();}catch(error){failure=error;}}
+ try{await listBudgets();}catch(error){showToast('Allowance saved, but the overrides table failed to refresh: '+error.message,'error');}
+ if(failure)throw failure;
+});
+el('removeBudget').onclick=report(async()=>{
+ const subject=el('budget').elements.subject.value;
+ const amount=el('budget').elements.monthly_usd.value;
+ await api('/api/v1/management/budgets','DELETE',{subject});
+ // Reload the editor only when it still shows the removed subject and the
+ // operator has not typed a new allowance since the removal started;
+ // otherwise just refresh the table so the in-progress edit survives.
+ if(el('budget').elements.subject.value===subject&&el('budget').elements.monthly_usd.value===amount)await updateBudgetViews();
+ else await listBudgets();
+});
+bind('price',async body=>{if(body.source_model){for(const k of ['input_cost_per_mtok','output_cost_per_mtok','cache_write_cost_per_mtok','cache_read_cost_per_mtok'])delete body[k];}else{delete body.source_model;for(const k of ['input_cost_per_mtok','output_cost_per_mtok','cache_write_cost_per_mtok','cache_read_cost_per_mtok']){if(String(body[k]).trim()==='')throw new Error('All four rates are required; enter 0 instead of leaving one blank.');body[k]=Number(body[k]);}}await api('/api/v1/management/prices','PUT',body);await loadPrices();});
+let priceRows=[],priceOffset=0;
+function renderPrices(){
+ const search=el('priceSearch').elements.search.value.toLowerCase();
+ const rows=priceRows.filter(row=>(row.Model+' '+row.Provider).toLowerCase().includes(search.trim()));
+ const size=Number(el('pricePageSize').value),page=TableControls.page(rows,priceOffset,size);priceOffset=page.offset;
+ const table=document.createElement('table');table.className='tbl';
+ const header=document.createElement('tr');for(const label of ['Model','Provider','Input','Output','Cache write','Cache read','Source','Action']){const cell=document.createElement('th');cell.textContent=label;header.append(cell);}table.append(header);
+ for(const item of page.rows){
+  const row=document.createElement('tr');
+  for(const value of [item.Model,item.Provider,item.InputCost,item.OutputCost,item.CacheWriteCost,item.CacheReadCost,item.Managed?'Managed override':'Imported / bundled']){const cell=document.createElement('td');cell.textContent=String(value);row.append(cell);}
+  const cell=document.createElement('td'),edit=document.createElement('button');edit.type='button';edit.className='btn btn-outline';edit.textContent='Edit rates';
+  edit.onclick=()=>{const form=el('price');for(const [field,value]of Object.entries({model:item.Model,provider:item.Provider,source_model:'',input_cost_per_mtok:item.InputCost,output_cost_per_mtok:item.OutputCost,cache_write_cost_per_mtok:item.CacheWriteCost,cache_read_cost_per_mtok:item.CacheReadCost}))form.elements[field].value=value;form.elements.model.focus();form.scrollIntoView({block:'center'});};
+  cell.append(edit);row.append(cell);table.append(row);
+ }
+ el('prices').replaceChildren(table);if(!rows.length)el('prices').textContent='No matching models.';
+ TableControls.pager(el('pricePages'),{offset:priceOffset,size,count:rows.length,hasMore:page.hasMore,onPage:offset=>{priceOffset=offset;renderPrices();}});
+}
+let priceGeneration=0;
+async function loadPrices(){const generation=++priceGeneration;let rows;try{rows=await api('/api/v1/management/prices')||[];}catch(error){if(generation!==priceGeneration)return;throw error;}if(generation!==priceGeneration)return;if(!Array.isArray(rows))throw new Error('Invalid price response.');priceRows=rows;priceOffset=0;renderPrices();}
+el('listPrices').onclick=report(loadPrices,false);
+bind('priceSearch',async()=>{if(!priceRows.length)await loadPrices();priceOffset=0;renderPrices();},false);
+let budgetOffset=0, budgetListGeneration=0;
+let budgetGeneration=0, budgetEditorValue;
+async function loadSelectedBudget(){
+ const generation=++budgetGeneration;
+ const subject=el('budget').elements.subject.value;
+ el('budget').elements.monthly_usd.disabled=true;el('budget').querySelector('button').disabled=true;el('removeBudget').disabled=true;
+ el('budget').elements.monthly_usd.value='';el('budgetCurrent').textContent='Loading current allowance…';
+ try{
+  if(!subject){el('budgetCurrent').textContent='Select a user.';return;}
+  const result=await api('/api/v1/management/budgets?subject='+encodeURIComponent(subject));
+  if(generation!==budgetGeneration)return;
+  if(!Array.isArray(result.data)||!Number.isFinite(result.default_monthly_usd))throw new Error('Invalid budget response.');
+  const override=result.data[0];
+  budgetEditorValue=String(override?override.monthly_usd:result.default_monthly_usd);el('budget').elements.monthly_usd.value=budgetEditorValue;
+  el('budgetCurrent').textContent=override?'Current override: $'+Number(override.monthly_usd).toFixed(2)+' per month.':'Inherits global default: $'+Number(result.default_monthly_usd).toFixed(2)+' per month.';
+  el('removeBudget').disabled=!override;
+  el('budget').elements.monthly_usd.disabled=false;el('budget').querySelector('button').disabled=false;
+ }catch(error){
+  // The editor stays disabled on failure: the current value is unknown and
+  // a blind save could overwrite it. A stale generation belongs to a newer
+  // invocation that owns the controls and the status line now, so its
+  // error is dropped; otherwise the rethrow is deliberate — every caller
+  // (bind/remove handlers and the tab loader) wraps this in report().
+  if(generation!==budgetGeneration)return;
+  el('budgetCurrent').textContent='Could not load the current allowance. Select the user again to retry.';
+  throw error;
+ }
+}
+async function updateBudgetViews(){
+ // The allowance error must not be masked by a later table-refresh error,
+ // but a table error alone must still surface.
+ let failure=null;
+ try{await loadSelectedBudget();}catch(error){failure=error;}
+ try{await listBudgets();}catch(error){failure=failure||error;}
+ if(failure)throw failure;
+}
+async function listBudgets(offset=budgetOffset){
+ const generation=++budgetListGeneration,size=Number(el('budgetPageSize').value);
+ let result;try{result=await api('/api/v1/management/budgets?limit='+size+'&offset='+offset+'&search='+encodeURIComponent(el('budgetSearch').elements.search.value));}catch(error){if(generation!==budgetListGeneration)return;throw error;}
+ if(generation!==budgetListGeneration)return;
+ if(!Array.isArray(result.data)||typeof result.has_more!=='boolean')throw new Error('Invalid budget response.');
+ if(!result.data.length&&offset>0){return listBudgets(Math.max(0,offset-size));}
+ budgetOffset=offset;
+ const table=document.createElement('table');table.className='tbl';
+ const head=document.createElement('tr');for(const label of ['Login','Monthly USD','Updated','Action']){const cell=document.createElement('th');cell.textContent=label;head.append(cell);}table.append(head);
+ for(const item of result.data){
+  const row=document.createElement('tr');for(const value of [item.principal,'$'+Number(item.monthly_usd).toFixed(2),new Date(item.updated_at).toLocaleString()]){const cell=document.createElement('td');cell.textContent=value;row.append(cell);}
+  const cell=document.createElement('td'),remove=document.createElement('button');remove.type='button';remove.className='btn btn-outline';remove.textContent='Remove override';
+  // The table always refreshes; the editor reloads only when the removal
+  // touched the selected user and the editor still holds the loaded value,
+  // so an unsaved allowance draft is never discarded.
+  remove.onclick=report(async()=>{if(!window.confirm('Remove the override for '+item.principal+' and restore the global default?'))return;remove.disabled=true;try{await api('/api/v1/management/budgets','DELETE',{subject:item.principal});if(item.principal===el('budget').elements.subject.value&&el('budget').elements.monthly_usd.value===budgetEditorValue)await updateBudgetViews();else await listBudgets();}catch(error){remove.disabled=false;throw error;}});
+  cell.append(remove);row.append(cell);table.append(row);
+ }
+ el('budgets').replaceChildren(table);if(!result.data.length)el('budgets').textContent='No matching overrides.';
+ TableControls.pager(el('budgetPages'),{offset:budgetOffset,size,hasMore:result.has_more,onPage:offset=>report(()=>listBudgets(offset),false)()});
+}
+el('budget').elements.subject.addEventListener('change',report(loadSelectedBudget,false));
+el('listBudgets').onclick=report(()=>listBudgets(),false);
+bind('budgetSearch',async()=>{await listBudgets(0);},false);
+el('budgetPageSize').onchange=report(()=>listBudgets(0),false);
+el('pricePageSize').onchange=()=>{priceOffset=0;renderPrices();};
+for(const [id,search] of [['priceSearch',()=>{priceOffset=0;renderPrices();}],['budgetSearch',report(()=>listBudgets(0),false)]]){
+ let timer;el(id).elements.search.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(search,200);});
+}
+
+let userGeneration=0,deferredDirectory=null;
+// applyDirectory repopulates one subject picker from a directory page. The
+// onboarding picker hides suspended identities; both pickers keep the current
+// selection when it survives, and a lost selection reloads whatever depends
+// on it (the issued-key view links, the budget editor).
+function applyDirectory(select,users){
+ const previous=select.value;select.replaceChildren();
+ for(const user of users){if(select===el('onboard').elements.subject&&!user.active)continue;const login=(user.logins||[])[0];if(!login)continue;const opt=document.createElement('option');opt.value=login;opt.textContent=(((user.tags||{}).first_name)||login)+' ('+login+')';select.append(opt);}
+ if([...select.options].some(o=>o.value===previous))select.value=previous;
+ // The one-time secret belongs to the completed issuance, not the picker:
+ // a directory refresh that drops (deactivates) the issued login keeps the
+ // delivery panel — still labeled with that subject — until it is explicitly
+ // dismissed or superseded by a new issuance.
+ if(select===el('onboard').elements.subject)updateViewLinks();
+ if(select===el('budget').elements.subject&&select.value!==previous)loadSelectedBudget().catch(()=>{});
+}
+async function loadUsers(){
+ // The endpoint pages the directory (limit/offset like the budgets listing);
+ // walk the pages so the subject pickers still see everyone, but keep the
+ // walk bounded so a runaway loop cannot hammer the API. When the bound
+ // trips, say so instead of silently rendering truncated pickers.
+ const generation=++userGeneration;
+ const users=[];const maxPages=20;let truncated=false;
+ for(let page=0;page<maxPages;page++){
+  let result;
+  try{result=await api('/api/v1/management/users?limit=500&offset='+users.length);}
+  catch(error){if(generation!==userGeneration)return;throw error;}
+  // Checking per page also stops a superseded walk early instead of
+  // fetching every remaining page just to drop the result.
+  if(generation!==userGeneration)return;
+  if(!Array.isArray(result.data)||typeof result.has_more!=='boolean')throw new Error('Invalid user response.');
+  users.push(...result.data);
+  if(!result.has_more)break;
+  truncated=page===maxPages-1;
+ }
+ // A newer walk owns the pickers now: only the latest directory response
+ // may update them or report truncation.
+ if(generation!==userGeneration)return;
+ if(truncated){
+  console.warn('User directory truncated at '+users.length+' entries; subject pickers may be incomplete.');
+  showToast('User directory truncated at '+users.length+' entries; subject pickers may be incomplete.','error');
+ }
+ // A directory walk that arrives while key issuance holds the onboarding
+ // picker locked is deferred, not dropped: issuance applies the latest
+ // directory when it finishes.
+ for(const select of [el('budget').elements.subject,el('onboard').elements.subject]){
+  if(select.disabled){deferredDirectory=users;continue;}
+  applyDirectory(select,users);
+ }
+}
+window.refreshManagedPrices=report(loadPrices,false);
+window.refreshManagedBudgets=report(updateBudgetViews,false);
+window.refreshManagedUsers=report(loadUsers,false);
+if(activeTab==='model-pricing')window.refreshManagedPrices();
+loadUsers().then(()=>{updateViewLinks();return activeTab==='user-quota'?updateBudgetViews():loadSelectedBudget();}).catch(error => {el('status').textContent=error.message;showToast(error.message,'error');});
+})();
+</script>

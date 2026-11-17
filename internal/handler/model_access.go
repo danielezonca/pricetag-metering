@@ -140,13 +140,14 @@ func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 }
 
 type createModelAccessRoleRequest struct {
-	Name           string   `json:"name"`
-	Description    string   `json:"description"`
-	Models         []string `json:"models"`
-	IsDefault      bool     `json:"is_default"`
-	ReplaceDefault bool     `json:"replace_default"`
-	MonthlyUSD     float64  `json:"monthly_usd"`
-	MonthlyTokens  int64    `json:"monthly_tokens"`
+	Name            string   `json:"name"`
+	Description     string   `json:"description"`
+	Models          []string `json:"models"`
+	IsDefault       bool     `json:"is_default"`
+	ReplaceDefault  bool     `json:"replace_default"`
+	MonthlyUSD      float64  `json:"monthly_usd"`
+	MonthlyTokens   int64    `json:"monthly_tokens"`
+	CreateRequestID string   `json:"create_request_id"`
 }
 
 type setModelAccessRoleModelsRequest struct {
@@ -331,6 +332,20 @@ func (h *ModelAccessHandler) handleRoles(w http.ResponseWriter, r *http.Request,
 			if !decodeJSON(w, r, &body) {
 				return
 			}
+			// Idempotent create: a retry that replays the same request id
+			// (after a lost response) returns the role it already created
+			// instead of a name conflict that carries no role id.
+			if body.CreateRequestID != "" {
+				existing, err := h.store.GetModelAccessRoleByRequestID(r.Context(), tenant, body.CreateRequestID)
+				if err == nil {
+					writeJSON(w, existing)
+					return
+				}
+				if !errors.Is(err, storage.ErrModelAccessRoleNotFound) {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}
 			if body.IsDefault && !body.ReplaceDefault {
 				existing, err := h.store.GetDefaultModelAccessRole(r.Context(), tenant)
 				if err == nil {
@@ -343,8 +358,18 @@ func (h *ModelAccessHandler) handleRoles(w http.ResponseWriter, r *http.Request,
 				}
 			}
 			role, err := h.store.CreateModelAccessRoleWithTokens(r.Context(), tenant, actor,
-				body.Name, body.Description, body.Models, body.IsDefault, body.MonthlyUSD, body.MonthlyTokens)
+				body.Name, body.Description, body.Models, body.IsDefault, body.MonthlyUSD, body.MonthlyTokens, body.CreateRequestID)
 			if err != nil {
+				// A name conflict may instead be an idempotent-replay race:
+				// two retries of the same request id, one of which already
+				// committed. Re-look-up by request id and return the winner's
+				// role rather than a conflict that carries no role id.
+				if errors.Is(err, storage.ErrModelAccessRoleNameExists) && body.CreateRequestID != "" {
+					if existing, lookupErr := h.store.GetModelAccessRoleByRequestID(r.Context(), tenant, body.CreateRequestID); lookupErr == nil {
+						writeJSON(w, existing)
+						return
+					}
+				}
 				status := http.StatusBadRequest
 				if errors.Is(err, storage.ErrModelAccessRoleNameExists) {
 					status = http.StatusConflict

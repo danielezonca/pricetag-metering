@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -69,6 +71,124 @@ func TestKubernetesOverlayConfiguration(t *testing.T) {
 	}
 }
 
+func TestDeploymentModeAndMaaSTLSConfiguration(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "")
+	t.Setenv("MAAS_API_CA_FILE", "")
+	t.Setenv("MAAS_API_INSECURE_SKIP_VERIFY", "")
+	cfg := Load()
+	if cfg.DeploymentMode != DeploymentModeCluster || cfg.StandaloneManagement() {
+		t.Fatal("cluster must be the default deployment mode")
+	}
+	if !cfg.MaaSAPITLS.InsecureSkipVerify || !cfg.MaaSAPITLS.FollowRedirects || cfg.MaaSAPITLS.StrictKeyList {
+		t.Fatal("cluster must retain the legacy MaaS transport defaults")
+	}
+	t.Setenv("MANAGEMENT_API_SECRET", "set-without-mode")
+	t.Setenv("MANAGEMENT_PUBLIC_ORIGIN", "")
+	cfg = Load()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("cluster mode must reject MANAGEMENT_API_SECRET so a standalone-style deployment that forgot DEPLOYMENT_MODE=standalone fails at startup")
+	}
+
+	t.Setenv("DEPLOYMENT_MODE", "standalone")
+	t.Setenv("MANAGEMENT_API_SECRET", "")
+	t.Setenv("MANAGEMENT_PUBLIC_ORIGIN", "")
+	cfg = Load()
+	if !cfg.StandaloneManagement() {
+		t.Fatal("standalone deployment mode was not loaded")
+	}
+	if cfg.MaaSAPITLS.InsecureSkipVerify || cfg.MaaSAPITLS.FollowRedirects || !cfg.MaaSAPITLS.StrictKeyList {
+		t.Fatal("standalone must use hardened MaaS transport defaults")
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("standalone login must require a public origin")
+	}
+	t.Setenv("MANAGEMENT_PUBLIC_ORIGIN", "https://app.example")
+	cfg = Load()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("standalone management must require an API secret")
+	}
+	t.Setenv("MANAGEMENT_API_SECRET", "management-secret")
+	cfg = Load()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid standalone configuration rejected: %v", err)
+	}
+
+	t.Setenv("MAAS_API_CA_FILE", "/tmp/maas-ca.pem")
+	t.Setenv("MAAS_API_INSECURE_SKIP_VERIFY", "true")
+	cfg = Load()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("MaaS CA bundle and insecure verification must be mutually exclusive")
+	}
+
+	t.Setenv("DEPLOYMENT_MODE", "invalid")
+	cfg = Load()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid deployment mode must fail startup")
+	}
+}
+
+// An unreadable CA bundle must fail startup: without this check the key
+// client would exit while the login validator silently degraded to system
+// roots, so one misconfiguration produced two different behaviors.
+func TestValidateRejectsUnreadableMaaSCAFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEPLOYMENT_MODE", "standalone")
+	t.Setenv("MANAGEMENT_API_SECRET", "operator-test-secret")
+	t.Setenv("MANAGEMENT_PUBLIC_ORIGIN", "https://gateway.example")
+	t.Setenv("MAAS_API_CA_FILE", filepath.Join(dir, "absent.pem"))
+	unsetEnv(t, "MAAS_API_INSECURE_SKIP_VERIFY")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MAAS_API_CA_FILE") {
+		t.Fatalf("got %v, want unreadable MAAS_API_CA_FILE rejection", err)
+	}
+
+	present := filepath.Join(dir, "present.pem")
+	if err := os.WriteFile(present, []byte("-----BEGIN CERTIFICATE-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAAS_API_CA_FILE", present)
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("readable CA file must pass configuration validation: %v", err)
+	}
+}
+
+// A padded management secret would reject every bearer token while looking
+// correctly configured: the middleware compares byte for byte, and clients
+// never send the surrounding whitespace. Startup must say so instead.
+func TestValidateRejectsPaddedManagementAPISecret(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "standalone")
+	t.Setenv("MANAGEMENT_API_SECRET", "operator-test-secret\n")
+	t.Setenv("MANAGEMENT_PUBLIC_ORIGIN", "https://gateway.example")
+	unsetEnv(t, "MAAS_API_CA_FILE")
+	unsetEnv(t, "MAAS_API_INSECURE_SKIP_VERIFY")
+	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "MANAGEMENT_API_SECRET") {
+		t.Fatalf("got %v, want padded MANAGEMENT_API_SECRET rejection", err)
+	}
+	t.Setenv("MANAGEMENT_API_SECRET", "  operator-test-secret")
+	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "MANAGEMENT_API_SECRET") {
+		t.Fatalf("got %v, want padded MANAGEMENT_API_SECRET rejection", err)
+	}
+	t.Setenv("MANAGEMENT_API_SECRET", "operator-test-secret")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("unpadded secret must pass configuration validation: %v", err)
+	}
+}
+
+func TestValidateRejectsNonASCIIOriginHost(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "standalone")
+	t.Setenv("MANAGEMENT_API_SECRET", "operator-test-secret")
+	t.Setenv("MANAGEMENT_PUBLIC_ORIGIN", "https://bücher.example")
+	unsetEnv(t, "MAAS_API_CA_FILE")
+	unsetEnv(t, "MAAS_API_INSECURE_SKIP_VERIFY")
+	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "punycode") {
+		t.Fatalf("got %v, want non-ASCII origin host rejection", err)
+	}
+	t.Setenv("MANAGEMENT_PUBLIC_ORIGIN", "https://xn--bcher-kva.example")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("punycode origin must pass configuration validation: %v", err)
+	}
+}
+
 func TestEnvList_Separators(t *testing.T) {
 	cases := map[string][]string{
 		"a@x.com,b@x.com":            {"a@x.com", "b@x.com"},
@@ -81,6 +201,38 @@ func TestEnvList_Separators(t *testing.T) {
 		t.Setenv("TEST_ENV_LIST", raw)
 		if got := envList("TEST_ENV_LIST"); !reflect.DeepEqual(got, want) {
 			t.Errorf("envList(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// The same-origin CSRF checks compare the configured origin against the
+// browser-serialized Origin header verbatim, so normalization must keep IPv6
+// literals bracketed and drop only explicit default ports.
+func TestNormalizePublicOrigin(t *testing.T) {
+	cases := map[string]string{
+		"":                           "",
+		"  https://gw.example  ":     "https://gw.example",
+		"https://gw.example/":        "https://gw.example",
+		"http://gw.example:80":       "http://gw.example",
+		"https://gw.example:443":     "https://gw.example",
+		"https://gw.example:8443":    "https://gw.example:8443",
+		"https://gw.example:0443":    "https://gw.example",
+		"http://gw.example:0080":     "http://gw.example",
+		"http://gw.example:08080":    "http://gw.example:8080",
+		"https://[::1]:443":          "https://[::1]",
+		"http://[2001:db8::1]:80":    "http://[2001:db8::1]",
+		"https://[2001:db8::1]:8443": "https://[2001:db8::1]:8443",
+		"HTTPS://GW.Example":         "https://gw.example",
+		"https://[2001:DB8::1]:443":  "https://[2001:db8::1]",
+		"https://[2001:0db8:0000:0000:0000:0000:0000:0001]": "https://[2001:db8::1]",
+		"https://[2001:0DB8::1]:8443":                       "https://[2001:db8::1]:8443",
+		// A non-ASCII host is left for Validate to reject — normalizing it
+		// would percent-encode it into a form no browser ever sends.
+		"https://bücher.example": "https://bücher.example",
+	}
+	for raw, want := range cases {
+		if got := normalizePublicOrigin(raw); got != want {
+			t.Errorf("normalizePublicOrigin(%q) = %q; want %q", raw, got, want)
 		}
 	}
 }
