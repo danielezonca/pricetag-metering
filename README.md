@@ -50,7 +50,7 @@ kubectl apply -f deploy/
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `PORT` | No | `8080` | HTTP listen port |
-| `MONTHLY_TOKEN_QUOTA` | No | `100000000` | Legacy per-user monthly token safety net for the entitlement endpoint. The gateway enforces the response; set a non-positive value only for explicitly unlimited deployments. |
+| `MONTHLY_TOKEN_QUOTA` | No | `100000000` | Legacy env fallback for token safety net (fresh DB defaults to `10B` via column default). `0` = unlimited, negative falls back to default. Prefer Safety Net tab or per-role/per-person token limits. |
 | `QUOTA_ENFORCEMENT_ENABLED` | No | `false` | Controls dollar/token quota blocking. Usage accounting remains active; set `true` only after quota policy is ready. |
 | `QOS_ENABLED` | No | `false` | Enables weighted-token QoS classification and the `qosClass`/`qosKeyAlias` response fields. |
 | `QOS_PROVIDERS` | No | `cb-glm` | Comma-separated usage providers counted toward the QoS windows. |

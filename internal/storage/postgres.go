@@ -62,6 +62,12 @@ type UsageStats struct {
 	SpendUSD      float64 `json:"spendUsd"`
 	MonthEnds     string  `json:"monthEnds"`
 
+	TokenLimit  int64  `json:"tokenLimit,omitempty"`
+	TokenUsed   int64  `json:"tokenUsed,omitempty"`
+	TokenBase   int64  `json:"tokenBase,omitempty"`
+	TokenCredit int64  `json:"tokenCredit,omitempty"`
+	TokenSource string `json:"tokenSource,omitempty"`
+
 	// OverLimitModel marks that this request passed via the post-cap model
 	// allowance (issue #22) rather than being under budget. Additive for
 	// older consumers.
@@ -377,6 +383,8 @@ func (s *Store) PoolStats() sql.DBStats {
 	return s.db.Stats()
 }
 
+func (s *Store) DB() *sql.DB { return s.db }
+
 type TeamUserUsage struct {
 	Username         string       `json:"username"`
 	Requests         int          `json:"requests"`
@@ -538,7 +546,14 @@ func (s *Store) getMonthlyUsage(ctx context.Context, username, model string, exe
 	if err != nil {
 		return UsageStats{}, err
 	}
-	stats := computeUsageStats(decision.TokensUsed, s.tokenQuota)
+	// DB-backed per-person token limit; 0 = unlimited (Safety Net 0 or MONTHLY_TOKEN_QUOTA=0).
+	tokenQuota := decision.TokenLimit
+	stats := computeUsageStats(decision.TokensUsed, tokenQuota)
+	stats.TokenLimit = decision.TokenLimit
+	stats.TokenUsed = decision.TokensUsed
+	stats.TokenBase = decision.BaseTokens
+	stats.TokenCredit = decision.TokenCredit
+	stats.TokenSource = decision.TokenSource
 	enforce := s.quotaEnforcement.Load()
 	stats.QuotaUSD = decision.LimitUSD
 	stats.RoleBudgetUSD = decision.RoleBudgetUSD
