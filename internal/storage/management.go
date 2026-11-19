@@ -96,6 +96,15 @@ func (s *Store) ProvisionLogin(ctx context.Context, actor string, p LoginProvisi
 	} else if err != nil {
 		return PartnerUser{}, err
 	}
+	// Serialize account-level mutations by stable user id: the advisory lock
+	// above is per-login-spelling, so a suspension through the current login
+	// and a no-field provision through a retained alias can otherwise race
+	// and let the provision's subject upsert write a stale active status
+	// back. Lock the row so the subject upsert below reads the committed
+	// profile rather than a pre-suspension snapshot.
+	if _, err = tx.ExecContext(ctx, `SELECT user_id FROM partner_users WHERE user_id=$1 FOR UPDATE`, id); err != nil {
+		return PartnerUser{}, err
+	}
 	if p.Name != "" {
 		if _, err = tx.ExecContext(ctx, `UPDATE partner_users SET tags=tags||jsonb_build_object('first_name',$2::text),updated_by=$3,updated_at=now() WHERE user_id=$1`, id, p.Name, actor); err != nil {
 			return PartnerUser{}, err

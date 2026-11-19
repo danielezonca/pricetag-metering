@@ -1973,6 +1973,10 @@ function createModelAccessRole() {
           return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'cost_center', values: maWizardCostCenters});
 //MODE:end
 //MODE:standalone
+          // Closing the wizard invalidates its generation; a deferred write
+          // must not still fire and grant model access after the operator
+          // cancelled. Check before sending, not just when reporting.
+          if (generation !== maWizardGeneration) return null;
           return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'cost_center', values: costCenters})
             .then(function() {
               // Remove only the entries this request applied: the picker
@@ -1994,6 +1998,9 @@ function createModelAccessRole() {
           return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'group', values: maWizardGroups});
 //MODE:end
 //MODE:standalone
+          // Same pre-send generation guard as the cost-center callback: a
+          // deferred write must not fire after the wizard was cancelled.
+          if (generation !== maWizardGeneration) return null;
           return sendJSON(maURL('/roles/' + encodeURIComponent(role.role_id) + '/subjects/filter'), 'POST', {field: 'group', values: groups})
             .then(function() {
               // Same snapshot filter as the cost-center callback: an edit
