@@ -85,7 +85,7 @@ window.loadManagedUserKeys=async user=>{
    loaded=true;
    heading.textContent='Active keys ('+keys.length+')';render();
    revoke.disabled=!login||!keys.length;
-  }catch(error){if(section.isConnected){loaded=false;content.textContent=error.message;const retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Reload';retry.onclick=()=>refresh();content.append(document.createElement('br'),retry);pages.replaceChildren();}}
+  }catch(error){if(section.isConnected){loaded=false;content.textContent=error.message;const retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Reload';retry.onclick=()=>refresh();content.append(document.createElement('br'),retry);pages.replaceChildren();revoke.disabled=!login;}}
  }
  revoke.onclick=async()=>{
   if(revoke.disabled)return;
