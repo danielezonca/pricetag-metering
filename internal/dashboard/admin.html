@@ -1776,7 +1776,16 @@ function closeRoleWizard() {
   // UI: the role stays half-configured until it is edited from the roles
   // table, so the abandonment must be an explicit choice, not a silent
   // × click.
-  if (maWizardCreatedRole && !confirm('Assignments for "' + maWizardCreatedRole.name + '" are incomplete. Close anyway? The role remains in the table, where it can be edited.')) return;
+  // A partial failure (role exists, assignments unfinished) and an ambiguous
+  // create (outcome unknown, request ID still armed) both need an explicit
+  // abandonment choice: closing discards the recovery path. An ordinary
+  // pre-submission cancellation stays prompt-free.
+  if (maWizardCreatedRole || maWizardCreateUnconfirmed) {
+    var abandonMsg = maWizardCreatedRole
+      ? 'Assignments for "' + maWizardCreatedRole.name + '" are incomplete.'
+      : 'A role may have been created but its response was lost; retry in this wizard to recover it.';
+    if (!confirm(abandonMsg + ' Close anyway? The role remains in the table, where it can be edited.')) return;
+  }
   maWizardGeneration++;
   maWizardCreatedRole = null;
   maWizardSubmitting = false;
@@ -1946,6 +1955,14 @@ function createModelAccessRole() {
   (maWizardCreatedRole
     ? reapplyWizardRolePolicy(maWizardCreatedRole, models, monthlyUSD, monthlyTokens)
     : createWizardRole(name, models, isDefault, !!replaceDefault, monthlyUSD, monthlyTokens)
+      .then(function(role) {
+        // The idempotent replay may have returned a role created from an
+        // earlier submission: retain its ID before re-applying the operator's
+        // current model/budget/token selections, so a failed policy write
+        // leaves the retry armed to finish without creating a second role.
+        maWizardCreatedRole = role;
+        return reapplyWizardRolePolicy(role, models, monthlyUSD, monthlyTokens);
+      })
   ).then(function(role) {
     if (generation !== maWizardGeneration) return null;
     maWizardCreatedRole = role;
@@ -2053,6 +2070,18 @@ function createModelAccessRole() {
       var replaceInput = document.getElementById('ma-wizard-replace');
       if (replaceInput) replaceInput.disabled = true;
     } else if (msg.indexOf('model access role name already exists') >= 0) {
+      // The server confirmed this request ID did not commit a role (the name
+      // is taken by another). Reset the attempt and unlock the create fields
+      // so the operator can choose a different name and the next POST mints
+      // a fresh request ID.
+      maWizardCreateUnconfirmed = false;
+      maWizardCreatePayload = null;
+      var nameInput = document.getElementById('ma-new-name');
+      if (nameInput) nameInput.disabled = false;
+      var defaultInput = document.getElementById('ma-new-default');
+      if (defaultInput) defaultInput.disabled = false;
+      var replaceInput = document.getElementById('ma-wizard-replace');
+      if (replaceInput) replaceInput.disabled = false;
 //MODE:end
       showToast('That role name is already in use, including by a retired role. Choose another name.', 'error');
     } else {

@@ -12,7 +12,7 @@ let userActiveBaseline;
 // form value can be stale if the account was suspended elsewhere, and
 // resending it would silently reactivate the user. New users and deliberate
 // status changes still send the selected value.
-bind('user',async body=>{const subject=body.subject;const payload={...body,active:body.active==='true'};if(userActiveBaseline!==undefined&&body.active===userActiveBaseline)delete payload.active;await api('/api/v1/management/users','PUT',payload);if(el('user').elements.subject.value===subject)userActiveBaseline=body.active;await loadUsers();loadPartnerUsers(0);});
+bind('user',async body=>{const subject=body.subject;const payload={...body,active:body.active==='true'};if(userActiveBaseline!==undefined&&body.active===userActiveBaseline)delete payload.active;await api('/api/v1/management/users','PUT',payload);if(el('user').elements.subject.value===subject)userActiveBaseline=body.active;try{await loadUsers();}catch(error){showToast('Saved, but the user list failed to refresh: '+error.message,'error');}loadPartnerUsers(0);});
 const issuedKey = KeyControls.delivery(el('onboardKey'));
 for (const [selector, action] of [['[data-key-copy]', () => issuedKey.copy()], ['[data-key-download]', () => issuedKey.download()], ['[data-key-clear]', () => issuedKey.clear()]]) {
  el('onboardKey').querySelector(selector).onclick = report(action);
@@ -27,7 +27,10 @@ el('onboard').elements.subject.addEventListener('change', () => {
  issuedKey.clear();updateViewLinks();
 });
 bind('onboard', async body => {
- issuedKey.clear(); const select=el('onboard').elements.subject;select.disabled=true;
+ // Keep the previously issued secret visible while the POST is pending: a
+ // failed mint must not discard a secret the operator may still need. A
+ // successful response replaces it via issuedKey.set.
+ const select=el('onboard').elements.subject;select.disabled=true;
  try {issuedKey.set(await api('/api/v1/management/keys', 'POST', body), {subject: body.subject, name: body.name});}
  finally {
   // Apply the deferred directory before unlocking so a walk that arrived

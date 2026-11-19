@@ -230,6 +230,14 @@ func (h *AdminHandler) myKeysCreate(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		// The MaaS error body is not echoed: it can contain request context.
+		if errors.Is(err, maasapi.ErrUnknownCreateOutcome) {
+			// The key may exist without a record: a retry could mint a second
+			// key. Tell the user reconciliation is required instead of
+			// suggesting they try again.
+			slog.Error("self-service key create outcome unknown; operator reconciliation required", "user", username, "error", err)
+			http.Error(w, "key creation outcome unknown; operator reconciliation required", http.StatusServiceUnavailable)
+			return
+		}
 		slog.Error("self-service key create failed", "user", username, "error", err)
 		http.Error(w, "could not create the key; try again", http.StatusBadGateway)
 		return
