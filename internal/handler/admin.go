@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -737,6 +738,14 @@ func (h *AdminHandler) createKey(w http.ResponseWriter, r *http.Request) {
 	// automation keeps working unchanged.
 	result, err := h.maasClient.CreateAPIKey(r.Context(), body.Username, body.Group, body.KeyName)
 	if err != nil {
+		if errors.Is(err, maasapi.ErrUnknownCreateOutcome) {
+			// The key may exist in MaaS without a local record: a natural
+			// retry would mint a second key. Report reconciliation instead of
+			// a definitive failure.
+			slog.Error("admin key mint outcome unknown; operator reconciliation required", "username", body.Username, "error", err)
+			http.Error(w, "key mint outcome unknown; operator reconciliation required", http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

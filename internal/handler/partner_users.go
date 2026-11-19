@@ -552,6 +552,14 @@ func (h *PartnerUsersHandler) mintKey(w http.ResponseWriter, r *http.Request, us
 	actor := partnerActor(r)
 	key, err := h.maas.CreateAPIKey(r.Context(), email, h.keyGroup, body.Name)
 	if err != nil {
+		if errors.Is(err, maasapi.ErrUnknownCreateOutcome) {
+			// The key may exist in MaaS without a local record: a natural
+			// retry would mint a second key. Report reconciliation instead of
+			// a definitive failure.
+			slog.Error("partner MaaS key mint outcome unknown; operator reconciliation required", "user_id", user.UserID, "error", err)
+			http.Error(w, "key mint outcome unknown; operator reconciliation required", http.StatusServiceUnavailable)
+			return
+		}
 		slog.Error("partner MaaS key mint failed", "user_id", user.UserID, "error", err)
 		http.Error(w, "MaaS key mint failed", http.StatusBadGateway)
 		return
