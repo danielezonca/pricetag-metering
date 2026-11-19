@@ -273,11 +273,18 @@ func (h *PartnerUsersHandler) HandleAdminUsers(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	// state=all means no state filter, exactly like an omitted state, so it
-	// must keep the unbounded full-list contract instead of silently
-	// truncating to the first paged slice.
+	// The unpaged branch keeps the unbounded full-list contract. An omitted
+	// state preserves cluster behavior (active users, ListAllPartnerUsers);
+	// state=all must include inactive users too, so it uses the any-state
+	// query instead of silently truncating to active-only.
 	if limitText == "" && offsetText == "" && search == "" && (state == "" || state == "all") {
-		users, err := h.store.ListAllPartnerUsers(r.Context())
+		var users []storage.PartnerUser
+		var err error
+		if state == "all" {
+			users, err = h.store.ListAllPartnerUsersAnyState(r.Context())
+		} else {
+			users, err = h.store.ListAllPartnerUsers(r.Context())
+		}
 		if err != nil {
 			http.Error(w, "partner user list failed", http.StatusInternalServerError)
 			return

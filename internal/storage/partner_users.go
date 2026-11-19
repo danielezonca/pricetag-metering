@@ -312,6 +312,26 @@ func (s *Store) ListAllPartnerUsers(ctx context.Context) ([]PartnerUser, error) 
 	return users, rows.Err()
 }
 
+// ListAllPartnerUsersAnyState returns every partner user regardless of active
+// state. It backs the standalone directory's unpaged state=all branch, which
+// must include suspended accounts rather than silently dropping them.
+func (s *Store) ListAllPartnerUsersAnyState(ctx context.Context) ([]PartnerUser, error) {
+	rows, err := s.db.QueryContext(ctx, partnerUserSelect+` ORDER BY p.created_at, p.user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []PartnerUser
+	for rows.Next() {
+		user, err := scanPartnerUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}
+
 // ListPartnerUsersPage returns one active Partner-user page, the total number
 // of active users matching the (optional) search, and whether a later page
 // exists. search is a case-insensitive substring matched against email, first
