@@ -14,9 +14,9 @@ import (
 // catch that class of drift; only a byte compare can.
 var clusterGoldenHashes = map[string]string{
 	"account.html":   "8a2e5dfb2e9960948263bcee4252cb4efb93d11cf86dd94dd6af76e1ab5779fc",
-	"admin.html":     "c077dc6d0e5182cc9de7babd4071887d81ac369c1f0e71bdc4f40d8bd3f6b7aa",
-	"dashboard.html": "08b1580af7c534702dcd557cb0a6647965fdef48d5281074d0a4646736ce912c",
-	"manager.html":   "377a3071445fc68f451b969bfb2dd7cbc7eadae1eda8aea1bda968faced084c0",
+	"admin.html":     "5ce2fa9a11e96fd5a159bed8ca478b7d0269a493c76c22597c3caf0f00bb29e2",
+	"dashboard.html": "8a84f079915d7d48d9b8d00c050502ca9a2486e92e25a3c9ea9139d73c245cd0",
+	"manager.html":   "7a3f9df49127fe5a3e11c92a984ba6eedecbd2c01cb0cad9107f29ea288b61da",
 }
 
 // TestClusterModeBytesMatchMain guards the byte-identical guarantee.

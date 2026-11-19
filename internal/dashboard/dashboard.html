@@ -1979,7 +1979,8 @@ try { if (localStorage.getItem('pricetag-demo-privacy') === '1') document.docume
 syncDemoMetrics();
 //MODE:end
 refresh();
-setInterval(refresh,30000);
+// No polling: this page is expensive to compute and refreshes on demand via
+// the Refresh button (and on range/filter changes).
 
 fetch('/api/v1/whoami').then(function(r){return r.json()}).then(function(d){
   if(d.user){
