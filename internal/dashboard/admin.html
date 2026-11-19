@@ -1905,7 +1905,6 @@ function reapplyWizardRolePolicy(role, models, monthlyUSD, monthlyTokens) {
 // the original role instead of answering with a name conflict that carries
 // no role id, so the pending assignments can still be finished.
 function createWizardRole(name, models, isDefault, replaceDefault, monthlyUSD, monthlyTokens) {
-  maWizardCreateUnconfirmed = false;
   if (!maWizardCreatePayload || !maWizardCreatePayload.requestID) {
     maWizardCreatePayload = { requestID: (window.crypto && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -2714,7 +2713,6 @@ function loadSafetyNet(resetDraft) {
       // policy. An interaction during the fetch can recreate the draft
       // from the previous policy; the reset still wins and discards it.
       safetyNetDraftFresh = true;
-      safetyNetResetPending = false;
     }
 //MODE:end
     return fetchJSON('/api/v1/admin/models').then(function(models) {
@@ -2749,6 +2747,11 @@ function loadSafetyNet(resetDraft) {
         safetyNetSaving = false;
         safetyNetSaveReleaseGeneration = 0;
       }
+      // The winning render is where a reset resolves: clear the pending
+      // reset here rather than at the policy read, so a superseding load
+      // during the models wait still inherits the reset requirement and
+      // rebuilds from its own policy.
+      safetyNetResetPending = false;
       renderSafetyNet();
     });
 //MODE:end

@@ -349,6 +349,16 @@ func (h *ModelAccessHandler) handleRoles(w http.ResponseWriter, r *http.Request,
 			if body.IsDefault && !body.ReplaceDefault {
 				existing, err := h.store.GetDefaultModelAccessRole(r.Context(), tenant)
 				if err == nil {
+					// A racing replay of the same request id may have created the
+					// default role between the idempotency lookup above and this
+					// check: re-look-up by request id and return it rather than a
+					// conflict that carries no role id.
+					if body.CreateRequestID != "" {
+						if replay, lookupErr := h.store.GetModelAccessRoleByRequestID(r.Context(), tenant, body.CreateRequestID); lookupErr == nil {
+							writeJSON(w, replay)
+							return
+						}
+					}
 					http.Error(w, "default role already exists: "+existing.Name+"; confirm replace_default to replace it", http.StatusConflict)
 					return
 				}

@@ -193,6 +193,12 @@ func (c *Client) CreateUserAPIKey(ctx context.Context, username, group string, r
 	defer resp.Body.Close()
 
 	data, _ := io.ReadAll(resp.Body)
+	// A gateway timeout or bad gateway may be returned after the upstream
+	// committed the key (the gateway failed on the response), so they are
+	// unknown outcomes, not definitive rejections.
+	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusGatewayTimeout {
+		return nil, fmt.Errorf("%w: maas-api key create returned status %d", ErrUnknownCreateOutcome, resp.StatusCode)
+	}
 	if resp.StatusCode >= 400 {
 		// Never put the upstream response body in an error: handlers log errors,
 		// and MaaS bodies can echo request context or key material.
