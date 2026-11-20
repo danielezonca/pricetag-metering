@@ -104,6 +104,31 @@ func TestTopUsersRankUsesOnlyTheColumnsTheListNeeds(t *testing.T) {
 
 // The usage surfaces are expensive to compute on the shared database, so they
 // must not poll. Both pages keep an explicit Refresh control instead.
+// Token counts on the org view already exceed a trillion, so the compact
+// formatter must step up past billions instead of printing "1924.1B".
+// Money KPIs must group thousands: "$169,845.03", not "$169845.03".
+func TestMoneyFormatterGroupsThousands(t *testing.T) {
+	data, err := FS.ReadFile("dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})")) {
+		t.Error("fmtC must group thousands in the cost/saved KPIs")
+	}
+}
+
+func TestTokenFormattersShowTrillions(t *testing.T) {
+	for _, file := range []string{"dashboard.html", "manager.html", "admin.html", "account.html"} {
+		data, err := FS.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(data, []byte("1e12")) || !bytes.Contains(data, []byte("'T'")) {
+			t.Errorf("%s token formatter must render trillions", file)
+		}
+	}
+}
+
 func TestUsagePagesDoNotAutoRefresh(t *testing.T) {
 	for _, file := range []string{"admin.html", "dashboard.html"} {
 		data, err := FS.ReadFile(file)
@@ -385,6 +410,45 @@ func TestAdminInlineScriptsParse(t *testing.T) {
 		}
 		if checked == 0 {
 			t.Fatalf("standalone=%v: admin.html has no inline scripts to parse", standalone)
+		}
+	}
+}
+
+// The personal Usage page must show the same per-model daily split the team
+// view has, backed by the self-pinned endpoint (the dashboard APIs are
+// admin-only, so a regular user would get a 403 from /api/v1/dashboard/*).
+func TestAccountHasSelfDailyModelUsage(t *testing.T) {
+	data, err := FS.ReadFile("account.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Daily model usage",
+		`id="self-model-timeline"`,
+		"/api/v1/me/usage/timeline?",
+		"cdn.jsdelivr.net/npm/chart.js@4.4.4",
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("account.html is missing %q for the self daily model usage chart", want)
+		}
+	}
+}
+
+// The decorative dollars/tokens flow is part of the Usage and My team views.
+func TestUserFacingUsagePagesHaveBackgroundFlow(t *testing.T) {
+	for _, file := range []string{"account.html", "manager.html"} {
+		data, err := FS.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			`id="dashboard-flow"`,
+			`#dashboard-flow{position:fixed`,
+			`var prices=["$0.15","$0.47","$0.016","$1.20"];`,
+		} {
+			if !bytes.Contains(data, []byte(want)) {
+				t.Errorf("%s is missing %q from the background flow", file, want)
+			}
 		}
 	}
 }
