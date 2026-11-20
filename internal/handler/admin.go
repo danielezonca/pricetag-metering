@@ -749,6 +749,9 @@ func (h *AdminHandler) createKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if rejectIncompleteKey(w, r, h.maasClient, result, body.Username, body.Group) {
+		return
+	}
 	metrics.KeysMintedTotal.Inc()
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, result)

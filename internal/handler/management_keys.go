@@ -181,6 +181,10 @@ func NewManagementKeyRevocationsHandler(store *storage.Store, cfg config.Config,
 			http.Error(w, "method not allowed", 405)
 			return
 		}
+		if cfg.PartnerUserKeyGroup == "" {
+			http.Error(w, "key group not configured", http.StatusServiceUnavailable)
+			return
+		}
 		var body struct {
 			Subject string `json:"subject"`
 			DryRun  bool   `json:"dry_run"`
@@ -217,16 +221,46 @@ func NewManagementKeyRevocationsHandler(store *storage.Store, cfg config.Config,
 		}
 		total := 0
 		countKnown := true
-		for _, login := range logins {
-			count, known, err := maas.RevokeAllUserAPIKeys(r.Context(), login, cfg.PartnerUserKeyGroup, body.DryRun)
-			if err != nil {
-				http.Error(w, "key service failed; revocation may be partial, retry this user", 502)
+		seen := make(map[string]bool)
+		stable := false
+		// Renames retain old logins and may add new ones while MaaS is
+		// processing a sweep. Re-read after each round and cover new logins;
+		// fail explicitly if directory churn prevents a bounded completion.
+		for round := 0; round < 3; round++ {
+			for _, login := range logins {
+				if seen[login] {
+					continue
+				}
+				count, known, err := maas.RevokeAllUserAPIKeys(r.Context(), login, cfg.PartnerUserKeyGroup, body.DryRun)
+				if err != nil {
+					http.Error(w, "key service failed; revocation may be partial, retry this user", 502)
+					return
+				}
+				total += count
+				if !known {
+					countKnown = false
+				}
+				seen[login] = true
+			}
+			logins, err = store.ListPartnerUsernames(r.Context(), user.UserID)
+			if err != nil || len(logins) == 0 {
+				http.Error(w, "user logins unavailable; revocation may be partial", 503)
 				return
 			}
-			total += count
-			if !known {
-				countKnown = false
+			stable = true
+			for _, login := range logins {
+				if !seen[login] {
+					stable = false
+					break
+				}
 			}
+			if stable {
+				break
+			}
+		}
+		if !stable {
+			http.Error(w, "user logins changed during revocation; retry this user", http.StatusConflict)
+			return
 		}
 		// A bodyless revocation succeeds but reports no count: represent it as
 		// unknown rather than auditing or answering with a fabricated zero.

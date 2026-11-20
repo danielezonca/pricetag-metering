@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -420,10 +421,19 @@ func openFreshStoreWithAdmin(t *testing.T, dsn string) (*storage.Store, *sql.DB)
 	if err != nil {
 		t.Fatalf("open admin db: %v", err)
 	}
+	t.Cleanup(func() { _ = admin.Close() })
 	dbName := fmt.Sprintf("partnerapi_%d", time.Now().UnixNano())
-	if _, err := admin.Exec("CREATE DATABASE " + dbName); err != nil {
+	if _, err := admin.ExecContext(t.Context(), "CREATE DATABASE "+dbName); err != nil {
 		t.Fatalf("create test db: %v", err)
 	}
+	t.Cleanup(func() {
+		// A migration failure may leave its unreturned pool connected. The
+		// database belongs exclusively to this test, so terminate any such
+		// sessions rather than leaking the throwaway database on failure.
+		if _, err := admin.ExecContext(context.Background(), "DROP DATABASE "+dbName+" WITH (FORCE)"); err != nil {
+			t.Errorf("drop test database: %v", err)
+		}
+	})
 	slash := strings.LastIndex(dsn, "/")
 	rest := dsn[slash+1:]
 	query := ""
@@ -435,15 +445,11 @@ func openFreshStoreWithAdmin(t *testing.T, dsn string) (*storage.Store, *sql.DB)
 	if err != nil {
 		t.Fatalf("open fresh store: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	testdb, err := sql.Open("postgres", testDSN)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	t.Cleanup(func() {
-		testdb.Close()
-		store.Close()
-		admin.Exec("DROP DATABASE " + dbName) //nolint:errcheck
-		admin.Close()
-	})
+	t.Cleanup(func() { _ = testdb.Close() })
 	return store, testdb
 }

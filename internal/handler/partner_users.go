@@ -571,6 +571,9 @@ func (h *PartnerUsersHandler) mintKey(w http.ResponseWriter, r *http.Request, us
 		http.Error(w, "MaaS key mint failed", http.StatusBadGateway)
 		return
 	}
+	if rejectIncompleteKey(w, r, h.maas, key, email, h.keyGroup) {
+		return
+	}
 	metrics.KeysMintedTotal.Inc()
 	if err := h.store.RecordPartnerUserKey(r.Context(), actor, user.UserID, key.ID, email, body.Name); err != nil {
 		// The key is live in MaaS but we cannot hand it out. Revoke it so it

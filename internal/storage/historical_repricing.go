@@ -71,20 +71,22 @@ func newOperationID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func (s *Store) pricingSnapshotHash(ctx context.Context, tx *sql.Tx, where string, args []any, policyVersion string) (string, error) {
-	q := fmt.Sprintf(`SELECT COALESCE(p.model,''), COALESCE(p.provider,''),
+func (s *Store) pricingSnapshotHash(ctx context.Context, tx *sql.Tx, policyVersion string) (string, error) {
+	q := `SELECT COALESCE(p.model,''), COALESCE(p.provider,''),
 		COALESCE(p.input_cost_per_mtok,0), COALESCE(p.output_cost_per_mtok,0),
 		COALESCE(p.cache_read_cost_per_mtok,0), COALESCE(p.cache_write_cost_per_mtok,0)
-		FROM usage_events e LEFT JOIN model_pricing p ON p.model=e.model
-		WHERE %s GROUP BY p.model,p.provider,p.input_cost_per_mtok,p.output_cost_per_mtok,p.cache_read_cost_per_mtok,p.cache_write_cost_per_mtok
-		ORDER BY p.model,p.provider`, where[5:])
-	rows, err := tx.QueryContext(ctx, q, args...)
+		FROM model_pricing p ORDER BY p.model,p.provider`
+	// Late events can introduce models absent from the preview's ledger
+	// rows. Bind every copied rate, and the fallback expression for unknown
+	// models, to the approval hash rather than only models already used.
+	rows, err := tx.QueryContext(ctx, q)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
 	h := sha256.New()
 	_, _ = h.Write([]byte(policyVersion + "\n"))
+	_, _ = h.Write([]byte(currentPriceUSDExpr + "\n"))
 	for rows.Next() {
 		var model, provider string
 		var in, out, read, write float64
@@ -202,7 +204,7 @@ func (s *Store) RepriceHistorical(ctx context.Context, actor string, req Histori
 	if err := snapshot.QueryRowContext(ctx, query, args...).Scan(&result.Rows, &result.OldTotal, &result.NewTotal); err != nil {
 		return HistoricalRepriceResult{}, err
 	}
-	snapshotHash, err := s.pricingSnapshotHash(ctx, snapshot, where, args, req.Policy)
+	snapshotHash, err := s.pricingSnapshotHash(ctx, snapshot, req.Policy)
 	if err != nil {
 		return HistoricalRepriceResult{}, fmt.Errorf("create pricing snapshot: %w", err)
 	}

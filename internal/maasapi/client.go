@@ -199,7 +199,7 @@ func (c *Client) CreateUserAPIKey(ctx context.Context, username, group string, r
 	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusGatewayTimeout {
 		return nil, fmt.Errorf("%w: maas-api key create returned status %d", ErrUnknownCreateOutcome, resp.StatusCode)
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		// Never put the upstream response body in an error: handlers log errors,
 		// and MaaS bodies can echo request context or key material.
 		return nil, fmt.Errorf("maas-api key create failed with status %d", resp.StatusCode)
@@ -489,7 +489,10 @@ func (c *Client) RevokeAllUserAPIKeys(ctx context.Context, username, group strin
 		}
 		return 0, false, err
 	}
-	if result.Count == nil || *result.Count < 0 {
+	if result.Count == nil {
+		return 0, false, nil
+	}
+	if *result.Count < 0 {
 		return 0, false, fmt.Errorf("invalid key count")
 	}
 	return *result.Count, true, nil

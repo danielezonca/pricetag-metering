@@ -244,9 +244,11 @@ func (h *AdminHandler) myKeysCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// A 2xx create that omits the key id would leave standalone mode holding
 	// a credential it cannot record, revoke, or reconcile by id. Fail the
-	// mint instead of persisting an unaddressable reference; cluster mode
-	// passes the response through unchanged, matching the pre-standalone
-	// behavior.
+	// mint instead of persisting an unaddressable reference. Cluster mode
+	// uses the shared incomplete-response check above.
+	if !h.cfg.StandaloneManagement() && rejectIncompleteKey(w, r, h.maasClient, result, username, group) {
+		return
+	}
 	if h.cfg.StandaloneManagement() && strings.TrimSpace(result.ID) == "" {
 		slog.Error("self-service key create returned no key id", "user", username)
 		http.Error(w, "created key is missing its identifier; contact an administrator", http.StatusBadGateway)

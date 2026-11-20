@@ -1449,6 +1449,14 @@ function rejectReq(id){
   decideReq(id,'reject',{comment:c.trim()},'Rejected.');
 }
 
+//MODE:standalone
+function renderSelfSpend(){
+  const totals=rows.reduce((sum,row)=>({cost:sum.cost+Number(row.cost_usd||0),tokens:sum.tokens+Number(row.total_tokens||0),requests:sum.requests+Number(row.requests||0)}),{cost:0,tokens:0,requests:0});
+  document.getElementById('kSpend').textContent=fmt$(totals.cost);
+  document.getElementById('kSpendS').textContent=fmtTok(totals.tokens)+' tokens · '+totals.requests+' requests this window';
+  document.getElementById('kSpendL').textContent='My spend';
+}
+//MODE:end
 async function loadSelf(){
 //MODE:cluster
   // Self-pinned: the admin-only /dashboard/users listing returns the whole
@@ -1489,6 +1497,7 @@ async function loadSelf(){
     if(!Array.isArray(response))throw new Error((response&&response.error)||'usage failed');
     rows=response;
     renderRows();
+    renderSelfSpend();
     // This request succeeded where an earlier one may have fallen back to
     // self-scoped charts (the identity or its org root appeared since).
     // Track the org-chart mode so the reference selector and later range
@@ -1529,6 +1538,7 @@ async function loadSelf(){
           over_limit:!!(me.quota&&me.quota.limit_usd&&me.quota.spent_usd>=me.quota.limit_usd)
         }));
         renderRows();
+        renderSelfSpend();
       }catch(e){
         if(usageGeneration!==generation||range!==requestRange)return;
         document.getElementById('rows').innerHTML='<tr><td colspan="6" class="err">'+esc(e instanceof Error?e.message:String(e))+'</td></tr>';

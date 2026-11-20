@@ -17,6 +17,7 @@ import (
 var (
 	ErrModelAccessRoleNotFound   = errors.New("model access role not found")
 	ErrModelAccessRoleNameExists = errors.New("model access role name already exists")
+	ErrModelAccessDefaultExists  = errors.New("default role already exists; confirm replace_default to replace it")
 	ErrInvalidModelAccessRole    = errors.New("invalid model access role")
 	ErrInvalidModelAccessModel   = errors.New("invalid model identifier")
 	ErrCannotRetireDefaultRole   = errors.New("cannot retire the default role; create or assign another default first")
@@ -233,6 +234,12 @@ func (s *Store) GetModelAccessRoleByRequestID(ctx context.Context, tenantID, req
 }
 
 func (s *Store) CreateModelAccessRoleWithTokens(ctx context.Context, tenantID, actor, name, description string, models []string, isDefault bool, monthlyUSD float64, monthlyTokens int64, createRequestID string) (ModelAccessRole, error) {
+	// Preserve the internal helper's replacement behavior. HTTP creates use
+	// CreateModelAccessRoleWithReplacement with the caller's explicit consent.
+	return s.CreateModelAccessRoleWithReplacement(ctx, tenantID, actor, name, description, models, isDefault, monthlyUSD, monthlyTokens, createRequestID, true)
+}
+
+func (s *Store) CreateModelAccessRoleWithReplacement(ctx context.Context, tenantID, actor, name, description string, models []string, isDefault bool, monthlyUSD float64, monthlyTokens int64, createRequestID string, replaceDefault bool) (ModelAccessRole, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 120 {
 		return ModelAccessRole{}, fmt.Errorf("%w: name required, max 120 bytes", ErrInvalidModelAccessRole)
@@ -253,6 +260,20 @@ func (s *Store) CreateModelAccessRoleWithTokens(ctx context.Context, tenantID, a
 		return ModelAccessRole{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if isDefault {
+		// An advisory lock covers the empty-default case too, where no row
+		// exists to lock. Every default create uses the same tenant lock.
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('model-access-default'), hashtext($1))`, tenantID); err != nil {
+			return ModelAccessRole{}, err
+		}
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_access_roles WHERE tenant_id=$1 AND is_default AND retired_at IS NULL)`, tenantID).Scan(&exists); err != nil {
+			return ModelAccessRole{}, err
+		}
+		if exists && !replaceDefault {
+			return ModelAccessRole{}, ErrModelAccessDefaultExists
+		}
+	}
 	var retiredAt sql.NullTime
 	switch err := tx.QueryRowContext(ctx, `
 		SELECT retired_at FROM model_access_roles

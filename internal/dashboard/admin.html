@@ -2706,7 +2706,7 @@ function excludeModelAccessDefault() {
 var safetyNetPolicy = null, safetyNetModels = [], safetyNetDraft = null;
 //MODE:end
 //MODE:standalone
-var safetyNetPolicy = null, safetyNetModels = [], safetyNetDraft = null, safetyNetModelLabels = {}, safetyNetGeneration = 0, safetyNetDraftFresh = false;
+var safetyNetPolicy = null, safetyNetModels = [], safetyNetDraft = null, safetyNetModelLabels = {}, safetyNetGeneration = 0, safetyNetDraftFresh = false, safetyNetDraftDirty = false;
 // The save-and-reset cycle keeps the editor locked: safetyNetSaving is
 // set for the whole cycle (a second save cannot start, and every
 // rerender re-applies the lock), and safetyNetSaveReleasePending marks
@@ -2749,22 +2749,6 @@ function loadSafetyNet(resetDraft) {
 //MODE:cluster
     safetyNetDraft = (policy.allowed_over_limit_models || []).slice();
 //MODE:end
-//MODE:standalone
-    if (resetDraft || safetyNetResetPending || !safetyNetDraft) {
-      safetyNetDraft = {
-        default_monthly_usd: policy.default_monthly_usd,
-        default_monthly_tokens: policy.default_monthly_tokens != null ? policy.default_monthly_tokens : 0,
-        enforced: !!policy.enforced,
-        allowed_over_limit_models: (policy.allowed_over_limit_models || []).slice()
-      };
-      // The controls still hold pre-fetch values: a freshly rebuilt draft
-      // must render the fetched policy, not re-absorb them, or a reset
-      // would keep showing the stale controls instead of the server's
-      // policy. An interaction during the fetch can recreate the draft
-      // from the previous policy; the reset still wins and discards it.
-      safetyNetDraftFresh = true;
-    }
-//MODE:end
     return fetchJSON('/api/v1/admin/models').then(function(models) {
 //MODE:standalone
       if (safetyNetGeneration !== generation) return;
@@ -2787,6 +2771,21 @@ function loadSafetyNet(resetDraft) {
       safetyNetModels = [];
     }).then(function() {
       if (safetyNetGeneration !== generation) return;
+      if (resetDraft || safetyNetResetPending || !safetyNetDraft || !safetyNetDraftDirty) {
+        safetyNetDraft = {
+          default_monthly_usd: policy.default_monthly_usd,
+          default_monthly_tokens: policy.default_monthly_tokens != null ? policy.default_monthly_tokens : 0,
+          enforced: !!policy.enforced,
+          allowed_over_limit_models: (policy.allowed_over_limit_models || []).slice()
+        };
+        // The controls still hold pre-fetch values: a freshly rebuilt draft
+        // must render the fetched policy, not re-absorb them, or a reset
+        // would keep showing the stale controls instead of the server's
+        // policy. An interaction during the fetch can recreate the draft
+        // from the previous policy; the reset still wins and discards it.
+        safetyNetDraftFresh = true;
+        safetyNetDraftDirty = false;
+      }
       // A committed save releases its lock here, after this load's render
       // has fetched the saved policy: clearing the flags first lets the
       // render below rebuild the controls unlocked. A superseded load
@@ -2935,6 +2934,8 @@ function renderSafetyNet() {
 //MODE:end
     '</div><div style="margin-top:16px"><button class="btn btn-grn" onclick="saveSafetyNet()">Save safety net</button></div>';
 //MODE:standalone
+  var draftBody = document.getElementById('safety-net-body');
+  if (draftBody) draftBody.oninput = draftBody.onchange = function() { safetyNetDraftDirty = true; };
   // A save in progress keeps its lock across this rerender: the header
   // Refresh button sits outside the editor body, and its load rerenders
   // these controls — without re-applying the lock, the editor would
@@ -2964,6 +2965,7 @@ function addSafetyModel() {
 //MODE:end
 //MODE:standalone
   if (!safetyNetDraft) safetyNetDraft = rebuildSafetyNetDraft();
+  safetyNetDraftDirty = true;
   if (safetyNetDraft.allowed_over_limit_models.indexOf(value) < 0) safetyNetDraft.allowed_over_limit_models.push(value);
 //MODE:end
   renderSafetyNet();
@@ -2972,7 +2974,7 @@ function addSafetyModel() {
 function removeSafetyModel(index) { safetyNetDraft.splice(index, 1); renderSafetyNet(); }
 //MODE:end
 //MODE:standalone
-function removeSafetyModel(index) { if (!safetyNetDraft) safetyNetDraft = rebuildSafetyNetDraft(); safetyNetDraft.allowed_over_limit_models.splice(index, 1); renderSafetyNet(); }
+function removeSafetyModel(index) { safetyNetDraftDirty = true; if (!safetyNetDraft) safetyNetDraft = rebuildSafetyNetDraft(); safetyNetDraft.allowed_over_limit_models.splice(index, 1); renderSafetyNet(); }
 //MODE:end
 function saveSafetyNet() {
 //MODE:cluster
@@ -4172,7 +4174,12 @@ function updatePartnerAccess(select) {
   role.removeAttribute('title');
   controls.forEach(function(control) { control.disabled = true; });
   updateJSON('/api/v1/admin/partner-users/' + encodeURIComponent(userID), 'PATCH', {role: role.value, manager_user_id: managerUserID || null})
-    .then(function() { showToast('Partner access updated', 'success'); loadPartnerUsers(); })
+    .then(function() {
+      var pending = partnerUsersPendingAccess.get(userID);
+      if (pending) pending.reconcile = true;
+      showToast('Partner access updated', 'success');
+      loadPartnerUsers();
+    })
     .catch(function(e) {
       var pending = partnerUsersPendingAccess.get(userID);
       if (pending) pending.reconcile = true;

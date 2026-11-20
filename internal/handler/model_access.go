@@ -367,21 +367,21 @@ func (h *ModelAccessHandler) handleRoles(w http.ResponseWriter, r *http.Request,
 					return
 				}
 			}
-			role, err := h.store.CreateModelAccessRoleWithTokens(r.Context(), tenant, actor,
-				body.Name, body.Description, body.Models, body.IsDefault, body.MonthlyUSD, body.MonthlyTokens, body.CreateRequestID)
+			role, err := h.store.CreateModelAccessRoleWithReplacement(r.Context(), tenant, actor,
+				body.Name, body.Description, body.Models, body.IsDefault, body.MonthlyUSD, body.MonthlyTokens, body.CreateRequestID, body.ReplaceDefault)
 			if err != nil {
 				// A name conflict may instead be an idempotent-replay race:
 				// two retries of the same request id, one of which already
 				// committed. Re-look-up by request id and return the winner's
 				// role rather than a conflict that carries no role id.
-				if errors.Is(err, storage.ErrModelAccessRoleNameExists) && body.CreateRequestID != "" {
+				if (errors.Is(err, storage.ErrModelAccessRoleNameExists) || errors.Is(err, storage.ErrModelAccessDefaultExists)) && body.CreateRequestID != "" {
 					if existing, lookupErr := h.store.GetModelAccessRoleByRequestID(r.Context(), tenant, body.CreateRequestID); lookupErr == nil {
 						writeJSON(w, existing)
 						return
 					}
 				}
 				status := http.StatusBadRequest
-				if errors.Is(err, storage.ErrModelAccessRoleNameExists) {
+				if errors.Is(err, storage.ErrModelAccessRoleNameExists) || errors.Is(err, storage.ErrModelAccessDefaultExists) {
 					status = http.StatusConflict
 				}
 				http.Error(w, err.Error(), status)

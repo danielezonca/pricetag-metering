@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -160,6 +161,9 @@ func TestRevokeAllUserAPIKeysAcceptsOnly2xx(t *testing.T) {
 	}{
 		{http.StatusContinue, "", true, 0, false},
 		{http.StatusOK, `{"revokedCount":2}`, false, 2, true},
+		{http.StatusOK, `{}`, false, 0, false},
+		{http.StatusOK, `{"revokedCount":null}`, false, 0, false},
+		{http.StatusOK, `{"revokedCount":-1}`, true, 0, false},
 		{http.StatusAccepted, `{"revokedCount":3}`, false, 3, true},
 		{http.StatusNoContent, "", false, 0, false},
 		{http.StatusMultipleChoices, "", true, 0, false},
@@ -230,5 +234,20 @@ func TestCreateAPIKeyPreservesMetadataReturnedByMaaS(t *testing.T) {
 	}
 	if key.Username != "canonical@example.com" || key.Tenant != "canonical-tenant" || key.Status != "pending" {
 		t.Fatalf("MaaS metadata was overwritten: %#v", key)
+	}
+}
+
+func TestCreateUserAPIKeyRejectsJSONRedirects(t *testing.T) {
+	for _, status := range []int{300, 301, 302, 307, 308} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			c := NewClient("http://fixture.invalid", "")
+			c.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			})}
+			key, err := c.CreateUserAPIKey(context.Background(), "alice", "users", CreateKeyRequest{Name: "test"})
+			if err == nil || key != nil {
+				t.Fatalf("redirect accepted: key=%+v err=%v", key, err)
+			}
+		})
 	}
 }
