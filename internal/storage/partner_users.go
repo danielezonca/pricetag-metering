@@ -549,24 +549,28 @@ func (s *Store) UpdatePartnerUserAccess(ctx context.Context, actor, userID, role
 		return PartnerUser{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM partner_users WHERE user_id=$1)`, id).Scan(&exists); err != nil {
+	var currentManager sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT manager_user_id::text FROM partner_users WHERE user_id=$1 FOR UPDATE`, id).Scan(&currentManager); errors.Is(err, sql.ErrNoRows) {
+		return PartnerUser{}, ErrPartnerUserNotFound
+	} else if err != nil {
 		return PartnerUser{}, err
 	}
-	if !exists {
-		return PartnerUser{}, ErrPartnerUserNotFound
-	}
 	if manager != nil {
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM partner_users WHERE user_id=$1 AND active)`, *manager).Scan(&exists); err != nil {
-			return PartnerUser{}, err
-		}
-		if !exists {
-			return PartnerUser{}, ErrPartnerUserNotFound
-		}
-		// Reject cycles: the proposed manager must not already report (directly
-		// or transitively) to this user, which would make the hierarchy loop.
-		var cycle bool
-		if err := tx.QueryRowContext(ctx, `
+		preservingManager := currentManager.Valid && currentManager.String == *manager
+		if !preservingManager {
+			var managerActive bool
+			if err := tx.QueryRowContext(ctx, `SELECT active FROM partner_users WHERE user_id=$1`, *manager).Scan(&managerActive); errors.Is(err, sql.ErrNoRows) {
+				return PartnerUser{}, ErrPartnerUserNotFound
+			} else if err != nil {
+				return PartnerUser{}, err
+			}
+			if !managerActive {
+				return PartnerUser{}, ErrPartnerUserInactive
+			}
+			// Reject cycles: a newly selected manager must not already report
+			// (directly or transitively) to this user, which would loop the tree.
+			var cycle bool
+			if err := tx.QueryRowContext(ctx, `
 			WITH RECURSIVE up(user_id, depth, path) AS (
 				SELECT $1::uuid, 0, ARRAY[$1::uuid]
 				UNION ALL
@@ -576,10 +580,11 @@ func (s *Store) UpdatePartnerUserAccess(ctx context.Context, actor, userID, role
 				WHERE p.manager_user_id IS NOT NULL AND u.depth < 1000 AND NOT p.manager_user_id = ANY(u.path)
 			)
 			SELECT EXISTS(SELECT 1 FROM up WHERE user_id = $2::uuid)`, *manager, id).Scan(&cycle); err != nil {
-			return PartnerUser{}, err
-		}
-		if cycle {
-			return PartnerUser{}, fmt.Errorf("%w: manager assignment would create a cycle", ErrInvalidPartnerUser)
+				return PartnerUser{}, err
+			}
+			if cycle {
+				return PartnerUser{}, fmt.Errorf("%w: manager assignment would create a cycle", ErrInvalidPartnerUser)
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `

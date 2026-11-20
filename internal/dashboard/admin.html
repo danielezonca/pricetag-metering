@@ -1296,21 +1296,39 @@ function setTabBadge(tab, n, alert) {
 var maRoles = [], maRole = null, maSubjects = [], maCatalog = [], maEffectiveSubject = null;
 //MODE:end
 //MODE:standalone
-var maRoles = [], maRole = null, maSubjects = [], maCatalog = [], maEffectiveSubject = null, maEffectiveGeneration = 0, maCreditsGeneration = 0, maCreditSubmitting = false, maCreditRequests = loadCreditRequests(), maSubjectsGeneration = 0;
-// Retry-safety across reloads: pending credit request IDs live in
-// sessionStorage (per-origin, so per-deployment, and per browser session,
-// which also scopes per operator). A failed credit POST may have committed
-// server-side; a reload must not drop its ID and risk doubling the credit.
+var maRoles = [], maRole = null, maSubjects = [], maCatalog = [], maEffectiveSubject = null, maEffectiveGeneration = 0, maCreditsGeneration = 0, maCreditSubmitting = false, maCreditRequests = new Map(), maSubjectsGeneration = 0;
+var maCreditOperator = '';
+// Retry-safety across reloads: key the ledger by the signed-in operator, not
+// merely the browser session. whoami reports real_user while viewing-as and
+// user otherwise, so a second operator cannot inherit the first one's IDs.
 function persistCreditRequests() {
-  try { sessionStorage.setItem('ma-credit-requests-v1', JSON.stringify(Array.from(maCreditRequests.entries()))); } catch (e) {}
+  if (!maCreditOperator) return;
+  try { sessionStorage.setItem('ma-credit-requests-v1:' + encodeURIComponent(maCreditOperator), JSON.stringify(Array.from(maCreditRequests.entries()))); } catch (e) {}
 }
-function loadCreditRequests() {
+function loadCreditRequests(operator) {
   var map = new Map();
+  if (!operator) return map;
   try {
-    var raw = sessionStorage.getItem('ma-credit-requests-v1');
+    var raw = sessionStorage.getItem('ma-credit-requests-v1:' + encodeURIComponent(operator));
     if (raw) JSON.parse(raw).forEach(function(e) { map.set(e[0], e[1]); });
   } catch (e) {}
   return map;
+}
+function refreshCreditRequests() {
+  return fetch('/whoami').then(function(r) {
+    if (!r.ok) throw new Error('whoami failed');
+    return r.json();
+  }).then(function(d) {
+    var operator = String(d.real_user || d.user || '');
+    if (!operator) return false;
+    if (operator !== maCreditOperator) {
+      maCreditOperator = operator;
+      maCreditRequests = loadCreditRequests(maCreditOperator);
+    }
+    // Do not migrate the old, unscoped ledger into any operator's namespace.
+    try { sessionStorage.removeItem('ma-credit-requests-v1'); } catch (e) {}
+    return true;
+  }).catch(function() { return false; });
 }
 //MODE:end
 var maHighlightRoleID = null;
@@ -1349,8 +1367,8 @@ function sendJSONStatus(url, method, body) {
         throw err;
       });
     }
-    if (r.status === 204) return null;
-    return r.json();
+    if (r.status === 204) return { status: r.status, body: null };
+    return r.json().then(function(body) { return { status: r.status, body: body }; });
   });
 }
 //MODE:end
@@ -1912,7 +1930,7 @@ function createWizardRole(name, models, isDefault, replaceDefault, monthlyUSD, m
     name: name, description: '', models: models, is_default: isDefault,
     replace_default: replaceDefault, monthly_usd: monthlyUSD, monthly_tokens: monthlyTokens,
     create_request_id: maWizardCreatePayload.requestID
-  });
+  }).then(function(response) { return { role: response.body, status: response.status }; });
 }
 //MODE:end
 function createModelAccessRole() {
@@ -1952,13 +1970,16 @@ function createModelAccessRole() {
   (maWizardCreatedRole
     ? reapplyWizardRolePolicy(maWizardCreatedRole, models, monthlyUSD, monthlyTokens)
     : createWizardRole(name, models, isDefault, !!replaceDefault, monthlyUSD, monthlyTokens)
-      .then(function(role) {
+      .then(function(created) {
+        var role = created.role;
         // The idempotent replay may have returned a role created from an
         // earlier submission: retain its ID before re-applying the operator's
         // current model/budget/token selections, so a failed policy write
         // leaves the retry armed to finish without creating a second role.
         maWizardCreatedRole = role;
-        return reapplyWizardRolePolicy(role, models, monthlyUSD, monthlyTokens);
+        return created.status === 201
+          ? role
+          : reapplyWizardRolePolicy(role, models, monthlyUSD, monthlyTokens);
       })
   ).then(function(role) {
     if (generation !== maWizardGeneration) return null;
@@ -2305,8 +2326,11 @@ function showModelAccessEffective(subjectID) {
 //MODE:end
 //MODE:standalone
   }).catch(function(err) {
-    if (maEffectiveSubject !== subjectID) return;
-    showToast('Effective access failed: ' + err.message, 'error');
+    if (maEffectiveGeneration !== generation || maEffectiveSubject !== subjectID) return;
+    var body = document.getElementById('ma-effective-body');
+    if (!body) return;
+    body.innerHTML = '<div class="err" role="alert" style="margin:10px 0">' + esc(err.message || String(err)) + '</div>' +
+      '<button class="btn btn-outline" onclick="showModelAccessEffective(\'' + jsq(subjectID) + '\')">Retry</button>';
   });
 //MODE:end
 }
@@ -2370,22 +2394,50 @@ function addModelAccessCredit() {
   // minting a new one; an entry is cleared only after that submission
   // succeeds.
   var requestKey = subjectID + '\n' + amount + '\n' + reason + '\n' + expires;
-  if (!maCreditRequests.has(requestKey)) {
-    // Retention is deliberate and unbounded within the page session: the
-    // server dedupes credits on (tenant, request_id) indefinitely, so
-    // dropping a failed submission's ID could double a credit that actually
-    // committed while its response was lost. Entries exist only for
-    // submissions that did not succeed (successes delete theirs) and a page
-    // reload resets the ledger, which bounds it in practice. A Map rather
-    // than an object literal keeps admin-typed reason text from colliding
-    // with Object.prototype keys such as __proto__.
-    maCreditRequests.set(requestKey, (window.crypto && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : String(Date.now()) + '-' + Math.random().toString(16).slice(2));
-    persistCreditRequests();
-  }
-  var requestId = maCreditRequests.get(requestKey);
   maCreditSubmitting = true;
+//MODE:end
+//MODE:standalone
+  refreshCreditRequests().then(function(ready) {
+    if (!ready) {
+      maCreditSubmitting = false;
+      showToast('Could not verify the signed-in operator. Reload and try again.', 'error');
+      return;
+    }
+    if (!maCreditRequests.has(requestKey)) {
+      // Retain failed IDs across reloads for this operator: a failed POST may
+      // have committed, and the server dedupes request IDs indefinitely.
+      maCreditRequests.set(requestKey, (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : String(Date.now()) + '-' + Math.random().toString(16).slice(2));
+      persistCreditRequests();
+    }
+    var requestId = maCreditRequests.get(requestKey);
+    sendJSON(maURL('/subjects/' + encodeURIComponent(subjectID) + '/credits'), 'POST', {amount_usd: amount, expires_at: expires, reason: reason, request_id: requestId})
+      .then(function() {
+        maCreditSubmitting = false;
+        // Delete before the subject guard: a subject switch must not leave a
+        // completed submission's ID in the ledger.
+        maCreditRequests.delete(requestKey);
+        persistCreditRequests();
+        if (maEffectiveSubject !== subjectID) return;
+        showToast('Credit added', 'success');
+        var amountInput = document.getElementById('ma-credit-amount');
+        var reasonInput = document.getElementById('ma-credit-reason');
+        if (amountInput) amountInput.value = '';
+        if (reasonInput) reasonInput.value = '';
+        loadModelAccessCredits(subjectID);
+      })
+      .catch(function(err) {
+        maCreditSubmitting = false;
+        if (maEffectiveSubject === subjectID) {
+          showToast('Credit failed: ' + err.message, 'error');
+        } else {
+          var who = maSubjects.filter(function(s) { return s.subject_id === subjectID; })[0];
+          showToast('Credit failed for ' + ((who && (who.display_name || who.email)) || subjectID) + ': ' + err.message, 'error');
+        }
+      });
+  });
+  return;
 //MODE:end
   sendJSON(maURL('/subjects/' + encodeURIComponent(maEffectiveSubject) + '/credits'), 'POST', {amount_usd: amount, expires_at: expires, reason: reason, request_id: requestId})
     .then(function() {
@@ -3920,6 +3972,7 @@ var partnerUsersAll = [], partnerManagersAll = [], partnerUsersPage = 0, partner
 //MODE:standalone
 var partnerUsersAll = [], partnerManagersAll = [], partnerUsersPage = 0, partnerUsersPageSize = 5, partnerUsersHasMore = false, partnerUsersSearch = '', partnerUsersSearchTimer = null;
 var partnerUsersGeneration;
+var partnerUsersPendingAccess = new Map(), partnerUsersAccessErrors = new Map();
 //MODE:end
 function loadPartnerUsers(page) {
   if (typeof page === 'number') partnerUsersPage = page;
@@ -3947,6 +4000,15 @@ function loadPartnerUsers(page) {
     var pageData = Array.isArray(payload) ? {users: payload, managers: payload, total: payload.length, has_more: false} : payload;
     partnerUsersAll = Array.isArray(pageData.users) ? pageData.users : [];
     partnerManagersAll = Array.isArray(pageData.managers) ? pageData.managers : partnerUsersAll;
+//MODE:standalone
+    if (partnerUsersPendingAccess) partnerUsersPendingAccess.forEach(function(pending, userID) {
+      var user = partnerUsersAll.filter(function(u) { return u.user_id === userID; })[0];
+      if (!user) return;
+      if (pending.reconcile || (user.role === pending.role && (user.manager_user_id || '') === pending.managerUserID)) {
+        partnerUsersPendingAccess.delete(userID);
+      }
+    });
+//MODE:end
     partnerUsersHasMore = !!pageData.has_more;
     document.getElementById('partner-users-count').textContent = '(' + (pageData.total || partnerUsersAll.length) + ')';
     loadRoles(partnerManagersAll);
@@ -4010,7 +4072,7 @@ function renderPartnerUsers() {
     if (u.manager_user_id && !partnerManagersAll.some(function(m) { return m.user_id === u.manager_user_id; })) {
       var inactiveManager = byId[u.manager_user_id];
       var inactiveManagerName = inactiveManager ? ((inactiveManager.tags || {}).first_name || inactiveManager.user_id) : u.manager_user_id;
-      managers = '<option value="' + esc(u.manager_user_id) + '" selected>' + esc(inactiveManagerName) + ' (inactive — choose a manager or none)</option>' + managers;
+      managers = '<option value="' + esc(u.manager_user_id) + '" data-inactive="true" selected>' + esc(inactiveManagerName) + ' (inactive — choose a manager or none)</option>' + managers;
     }
 //MODE:end
     html += '<tr data-user-id="' + esc(u.user_id) + '" tabindex="0" onclick="openPartnerDetails(' + partnerUsersAll.indexOf(u) + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openPartnerDetails(' + partnerUsersAll.indexOf(u) + ')}"><td><b>' + esc(name) + '</b><div class="ts">' + esc(t.email || '') + '<br>' + esc(u.user_id) + '</div></td>' +
@@ -4029,11 +4091,35 @@ function renderPartnerUsers() {
       '</select></td><td>' + (u.active ? 'active' : 'inactive') + '</td></tr>';
 //MODE:end
 //MODE:standalone
-      '</select></td><td>' + (u.active ? 'active' : 'inactive') + '</td><td><button type="button" class="btn btn-outline" onclick="event.stopPropagation();if(window.editManagedUser)editManagedUser('+partnerUsersAll.indexOf(u)+')" onkeydown="event.stopPropagation()">Edit</button></td></tr>';
+      '</select><div class="partner-role-feedback" aria-live="polite" style="display:none;color:var(--red);font-size:10px;margin-top:3px"></div></td><td>' + (u.active ? 'active' : 'inactive') + '</td><td><button type="button" class="btn btn-outline" onclick="event.stopPropagation();if(window.editManagedUser)editManagedUser('+partnerUsersAll.indexOf(u)+')" onkeydown="event.stopPropagation()">Edit</button></td></tr>';
 //MODE:end
   });
   html += '</tbody></table>';
   document.getElementById('partner-users-list').innerHTML = html;
+//MODE:standalone
+  document.querySelectorAll('#partner-users-list tr[data-user-id]').forEach(function(row) {
+    var user = partnerUsersAll.filter(function(u) { return u.user_id === row.getAttribute('data-user-id'); })[0];
+    if (user) {
+      row.setAttribute('data-manager-user-id', user.manager_user_id || '');
+      row.setAttribute('data-confirmed-role', user.role || 'user');
+    }
+    var role = row.querySelector('.partner-role');
+    if (role) {
+      var feedback = row.querySelector('.partner-role-feedback');
+      var userID = row.getAttribute('data-user-id');
+      var accessError = partnerUsersAccessErrors && partnerUsersAccessErrors.get(userID);
+      if (accessError) {
+        role.setAttribute('aria-invalid', 'true');
+        role.title = accessError;
+        feedback.textContent = accessError;
+        feedback.style.display = '';
+      }
+      if (partnerUsersPendingAccess && partnerUsersPendingAccess.has(userID)) {
+        row.querySelectorAll('select').forEach(function(control) { control.disabled = true; });
+      }
+    }
+  });
+//MODE:end
   renderPartnerUsersPager();
 }
 function openPartnerDetails(index) {
@@ -4055,6 +4141,7 @@ function openPartnerDetails(index) {
 }
 function closePartnerDetails(){document.getElementById('partner-detail-ov').classList.remove('show')}
 function updatePartnerAccess(select) {
+//MODE:cluster
   var row = select.closest('tr');
   var userID = row.getAttribute('data-user-id');
   var manager = row.querySelector('.partner-manager');
@@ -4064,6 +4151,40 @@ function updatePartnerAccess(select) {
   updateJSON('/api/v1/admin/partner-users/' + encodeURIComponent(userID), 'PATCH', {role: role.value, manager_user_id: manager.value || null})
     .then(function() { showToast('Partner access updated', 'success'); loadPartnerUsers(); })
     .catch(function(e) { showToast('Failed to update partner access: ' + e.message, 'error'); loadPartnerUsers(); });
+//MODE:end
+//MODE:standalone
+  var row = select.closest('tr');
+  var userID = row.getAttribute('data-user-id');
+  var manager = row.querySelector('.partner-manager');
+  var role = row.querySelector('.partner-role');
+  var feedback = row.querySelector('.partner-role-feedback');
+  var originalManager = row.getAttribute('data-manager-user-id') || '';
+  var originalRole = row.getAttribute('data-confirmed-role') || 'user';
+  // A role edit must resend the stored manager through the PATCH contract,
+  // even when that manager is now inactive. A manager-control edit submits
+  // the newly selected value, which the server validates as active.
+  var managerUserID = select === manager ? manager.value : originalManager;
+  var controls = row.querySelectorAll('select');
+  partnerUsersAccessErrors.delete(userID);
+  partnerUsersPendingAccess.set(userID, {role: role.value, managerUserID: managerUserID || '', reconcile: false});
+  if (feedback) { feedback.textContent = ''; feedback.style.display = 'none'; }
+  role.removeAttribute('aria-invalid');
+  role.removeAttribute('title');
+  controls.forEach(function(control) { control.disabled = true; });
+  updateJSON('/api/v1/admin/partner-users/' + encodeURIComponent(userID), 'PATCH', {role: role.value, manager_user_id: managerUserID || null})
+    .then(function() { showToast('Partner access updated', 'success'); loadPartnerUsers(); })
+    .catch(function(e) {
+      var pending = partnerUsersPendingAccess.get(userID);
+      if (pending) pending.reconcile = true;
+      partnerUsersAccessErrors.set(userID, e.message);
+      role.value = originalRole;
+      manager.value = originalManager;
+      role.setAttribute('aria-invalid', 'true');
+      role.title = e.message;
+      if (feedback) { feedback.textContent = e.message; feedback.style.display = ''; }
+      loadPartnerUsers();
+    });
+//MODE:end
 }
 function subtreeSet(rootSlug) {
   var byMgr = {};

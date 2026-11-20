@@ -346,3 +346,45 @@ func TestDashboardInlineScriptsParse(t *testing.T) {
 		}
 	}
 }
+
+func TestAdminInlineScriptsParse(t *testing.T) {
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not available; inline admin scripts are parsed in CI where node exists")
+	}
+	for _, standalone := range []bool{false, true} {
+		src := string(readMode(t, "admin.html", standalone))
+		checked := 0
+		for {
+			start := strings.Index(src, "<script")
+			if start < 0 {
+				break
+			}
+			openEnd := strings.Index(src[start:], ">")
+			if openEnd < 0 {
+				t.Fatal("unterminated <script> tag")
+			}
+			openEnd += start
+			closeRel := strings.Index(src[openEnd+1:], "</script>")
+			if closeRel < 0 {
+				t.Fatal("unterminated inline <script> block")
+			}
+			body := src[openEnd+1 : openEnd+1+closeRel]
+			src = src[openEnd+1+closeRel+len("</script>"):]
+			if strings.TrimSpace(body) == "" {
+				continue
+			}
+			path := filepath.Join(t.TempDir(), fmt.Sprintf("admin-inline-%d.js", checked))
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := exec.Command(nodePath, "--check", path).CombinedOutput(); err != nil {
+				t.Fatalf("standalone=%v: inline script %d does not parse: %v\n%s", standalone, checked, err, out)
+			}
+			checked++
+		}
+		if checked == 0 {
+			t.Fatalf("standalone=%v: admin.html has no inline scripts to parse", standalone)
+		}
+	}
+}

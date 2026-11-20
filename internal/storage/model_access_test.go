@@ -1012,7 +1012,7 @@ func TestModelAccessRoleIdempotentRequestID(t *testing.T) {
 	s, ctx := openTestStore(t)
 	tenant := createTestTenant(t, s, ctx, "idempotent-role", false)
 
-	created, err := s.CreateModelAccessRoleWithTokens(ctx, tenant, "tester", "req-role", "", []string{"model-a"}, false, 0, 0, "create-req-123")
+	created, err := s.CreateModelAccessRoleWithTokens(ctx, tenant, "tester", "req-role", "", nil, false, 0, 0, "create-req-123")
 	if err != nil {
 		t.Fatalf("create role: %v", err)
 	}
@@ -1021,8 +1021,11 @@ func TestModelAccessRoleIdempotentRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lookup by request id: %v", err)
 	}
-	if replayed.RoleID != created.RoleID || replayed.Name != "req-role" {
+	if replayed.RoleID != created.RoleID || replayed.Name != "req-role" || replayed.SubjectCount != created.SubjectCount || !slices.Equal(replayed.Models, created.Models) {
 		t.Fatalf("replayed role = %#v; want %#v", replayed, created)
+	}
+	if replayed.Models == nil {
+		t.Fatal("replayed role with no models must return an empty slice")
 	}
 
 	if _, err := s.GetModelAccessRoleByRequestID(ctx, tenant, "no-such-request"); !errors.Is(err, ErrModelAccessRoleNotFound) {

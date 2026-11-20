@@ -76,6 +76,20 @@ func TestManagerShowsTeamSpendKPI(t *testing.T) {
 	}
 }
 
+func TestManagerSelfChartsAndFallbackUseServerScopedRows(t *testing.T) {
+	data := readMode(t, "manager.html", true)
+	for _, want := range []string{
+		`j('/api/v1/dashboard/users?range='+requestRange`,
+		`chartJSON('/api/v1/dashboard/users?range='+requestRange`,
+		`chartsCache={overview:ov,models:mo,users:us,timeline:tl};`,
+		`rows=self.map(u=>({`,
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("standalone self dashboard no longer uses server-scoped rows: missing %q", want)
+		}
+	}
+}
+
 func TestManagerDemoModeHidesActualSpend(t *testing.T) {
 	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
