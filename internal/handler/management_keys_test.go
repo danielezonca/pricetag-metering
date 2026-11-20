@@ -13,6 +13,27 @@ import (
 	"github.com/redhat-et/pricetag-metering/internal/storage"
 )
 
+func TestManagementKeySecretMustBeNonemptyAndWhitespaceFree(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		secret string
+		usable bool
+	}{
+		{name: "ordinary secret", secret: "maas-secret-1", usable: true},
+		{name: "empty", secret: "", usable: false},
+		{name: "spaces only", secret: "   ", usable: false},
+		{name: "embedded space", secret: "maas secret", usable: false},
+		{name: "line break", secret: "maas\nsecret", usable: false},
+		{name: "unicode whitespace", secret: "maas\u00a0secret", usable: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasUsableManagementKeySecret(tc.secret); got != tc.usable {
+				t.Fatalf("hasUsableManagementKeySecret(%q)=%v, want %v", tc.secret, got, tc.usable)
+			}
+		})
+	}
+}
+
 func TestManagementCanRevokeInactiveIdentityKeys(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -119,6 +140,51 @@ func TestManagementKeyIssuanceMissingSecretIsCompensated(t *testing.T) {
 	h(w, r)
 	if w.Code != 409 {
 		t.Fatalf("status=%d; a secret-less create must be compensated and refused, not recorded", w.Code)
+	}
+	if revokes != 1 {
+		t.Fatalf("revokes=%d; the unusable key must be revoked by id", revokes)
+	}
+	user, err := store.PartnerUserByMaaSUsername(t.Context(), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := store.ListPartnerUserKeys(t.Context(), user.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("recorded keys=%d; a compensated issuance must not be recorded", len(keys))
+	}
+}
+
+func TestManagementKeyIssuanceWhitespaceSecretIsCompensated(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL required")
+	}
+	store := openFreshStore(t, dsn)
+	if _, err := store.ProvisionLogin(t.Context(), "test", storage.LoginProvision{Subject: "alice", Name: "Alice"}); err != nil {
+		t.Fatal(err)
+	}
+	revokes := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete {
+			revokes++
+			_, _ = w.Write([]byte(`{"revokedCount":1}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"key-3","name":"onboarding","username":"alice","status":"active","key":"maas secret 3"}`))
+	}))
+	defer upstream.Close()
+	cfg := config.Config{UserHeader: "X-User", PartnerUserKeyGroup: "system:authenticated"}
+	h := NewManagementKeysHandler(store, cfg, maasapi.NewClient(upstream.URL, ""))
+	r := httptest.NewRequest("POST", "/api/v1/management/keys", strings.NewReader(`{"subject":"alice","name":"onboarding","expiresIn":"24h"}`))
+	r.Header.Set("X-User", "admin")
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != 409 {
+		t.Fatalf("status=%d; a whitespace-bearing secret must be compensated and refused", w.Code)
 	}
 	if revokes != 1 {
 		t.Fatalf("revokes=%d; the unusable key must be revoked by id", revokes)

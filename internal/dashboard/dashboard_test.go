@@ -34,6 +34,23 @@ func TestDashboardToolMetricToggle(t *testing.T) {
 	}
 }
 
+func TestManagementUserSaveKeepsDirectoryRefreshWarning(t *testing.T) {
+	data, err := FS.ReadFile("management-admin-script.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"await api('/api/v1/management/users','PUT',payload)",
+		"void loadUsers().catch(error=>{const message='Saved, but the user list failed to refresh: '+error.message",
+		"showToast(message,'error')",
+		"showToast('Saved','success');},false)",
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("management user save does not preserve successful-save and refresh status %q", want)
+		}
+	}
+}
+
 func TestDashboardEscapesUserControlledIdentityFields(t *testing.T) {
 	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{

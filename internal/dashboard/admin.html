@@ -1361,7 +1361,7 @@ function sendJSONStatus(url, method, body) {
     body: body === undefined ? undefined : JSON.stringify(body)
   }).then(function(r) {
     if (!r.ok) {
-      return r.text().then(function(t) {
+      return r.text().catch(function() { return ''; }).then(function(t) {
         var err = new Error(t.trim() || (r.status + ' ' + r.statusText));
         err.status = r.status;
         throw err;

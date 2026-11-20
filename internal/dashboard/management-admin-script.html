@@ -12,7 +12,7 @@ let userActiveBaseline;
 // form value can be stale if the account was suspended elsewhere, and
 // resending it would silently reactivate the user. New users and deliberate
 // status changes still send the selected value.
-bind('user',async body=>{const subject=body.subject;const payload={...body,active:body.active==='true'};if(userActiveBaseline!==undefined&&body.active===userActiveBaseline)delete payload.active;await api('/api/v1/management/users','PUT',payload);if(el('user').elements.subject.value===subject)userActiveBaseline=body.active;try{await loadUsers();}catch(error){showToast('Saved, but the user list failed to refresh: '+error.message,'error');}loadPartnerUsers(0);});
+bind('user',async body=>{const subject=body.subject;const payload={...body,active:body.active==='true'};if(userActiveBaseline!==undefined&&body.active===userActiveBaseline)delete payload.active;await api('/api/v1/management/users','PUT',payload);if(el('user').elements.subject.value===subject)userActiveBaseline=body.active;void loadUsers().catch(error=>{const message='Saved, but the user list failed to refresh: '+error.message;el('status').textContent=message;showToast(message,'error');});loadPartnerUsers(0);showToast('Saved','success');},false);
 const issuedKey = KeyControls.delivery(el('onboardKey'));
 for (const [selector, action] of [['[data-key-copy]', () => issuedKey.copy()], ['[data-key-download]', () => issuedKey.download()], ['[data-key-clear]', () => issuedKey.clear()]]) {
  el('onboardKey').querySelector(selector).onclick = report(action);

@@ -59,10 +59,10 @@ const KeyControls = (() => {
       // Only callers responsible for clipboard/download receive this value.
       value: () => secret,
       set(result, metadata = {}) {
-        clear();
-        if (typeof result.key !== 'string' || !result.key.trim() || /\s/.test(result.key)) {
+        if (!result || typeof result.key !== 'string' || !result.key.trim() || /\s/.test(result.key)) {
           throw new Error('The key service returned no usable key. Check your key list before issuing another.');
         }
+        clear();
         downloadName = filename(metadata);
         // Name the owner in the panel itself, not just the download
         // filename: the operator must see whose key they are copying while

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/redhat-et/pricetag-metering/internal/config"
 	"github.com/redhat-et/pricetag-metering/internal/maasapi"
@@ -15,6 +16,10 @@ import (
 
 // NewManagementKeysHandler is protected by RequireManagement. It issues an
 // onboarding key as the selected user, never as the operator's MaaS identity.
+func hasUsableManagementKeySecret(secret string) bool {
+	return strings.TrimSpace(secret) != "" && strings.IndexFunc(secret, unicode.IsSpace) < 0
+}
+
 func NewManagementKeysHandler(store *storage.Store, cfg config.Config, maas *maasapi.Client) http.HandlerFunc {
 	slots := make(chan struct{}, partnerMintConcurrency)
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -126,13 +131,13 @@ func NewManagementKeysHandler(store *storage.Store, cfg config.Config, maas *maa
 			http.Error(w, "key issuance failed; operator reconciliation required", 503)
 			return
 		}
-		// A 2xx create that returns an id but not the one-time secret leaves
-		// the account with a key nobody can ever use: the secret is shown
-		// exactly once, at issuance. Unlike the missing-id case the key can
-		// be identified, so revoke it and refuse the issuance instead of
-		// recording a "successfully issued" key with no deliverable secret.
-		if strings.TrimSpace(key.Key) == "" {
-			slog.Error("key issuance returned no key secret; operator reconciliation required",
+		// A 2xx create that returns an unusable one-time secret leaves the
+		// account with a key nobody can reliably use: the secret is shown
+		// exactly once, at issuance, and the UI cannot deliver whitespace.
+		// Unlike the missing-id case the key can be identified, so revoke it
+		// and refuse the issuance instead of recording a success.
+		if !hasUsableManagementKeySecret(key.Key) {
+			slog.Error("key issuance returned no usable key secret; operator reconciliation required",
 				"user_id", user.UserID, "subject", subject, "key_name", body.Name, "key_id", key.ID)
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
 			defer cancel()

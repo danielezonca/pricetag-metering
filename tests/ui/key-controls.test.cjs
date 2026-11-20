@@ -30,6 +30,15 @@ test('secret delivery never puts the key in the DOM and clear disables copy/down
  assert.throws(()=>secret.set({id:'id'}));assert.equal(secret.value(),'');
 });
 
+test('malformed issuance response preserves the previously delivered secret',()=>{
+ const buttons=[{disabled:false},{disabled:false}],panel={dataset:{},hidden:true,querySelectorAll:()=>buttons,querySelector:()=>null};
+ const delivery=controls().delivery(panel);delivery.set({id:'old-id',key:'previous-fixture-secret'});
+ assert.throws(()=>delivery.set({id:'new-id',key:'new secret'}),/no usable key/);
+ assert.equal(delivery.value(),'previous-fixture-secret');assert.equal(panel.hidden,false);assert.equal(panel.dataset.keyId,'old-id');
+ assert.throws(()=>delivery.set(null),/no usable key/);
+ assert.equal(delivery.value(),'previous-fixture-secret');assert.equal(panel.hidden,false);
+});
+
 test('issued-key panel names the subject and resets it with the panel',async()=>{
  const label={textContent:'stale'};
  const panel={dataset:{},hidden:false,querySelectorAll:()=>[],querySelector:sel=>sel==='[data-key-subject]'?label:null};
