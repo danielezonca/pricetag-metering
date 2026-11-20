@@ -326,6 +326,70 @@ func TestDemoModeHidesActualSpend(t *testing.T) {
 	}
 }
 
+// The demo badge is inserted into the header only after privacy mode is
+// enabled. Its width must not make the navigation jump to another flex line
+// or align against the right edge of the header on desktop.
+func TestDemoModeKeepsHeaderNavigationAnchored(t *testing.T) {
+	data, err := FS.ReadFile("dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"@media(min-width:1201px)",
+		".demo-private .appbar{display:grid;grid-template-columns:auto auto minmax(0,1fr)",
+		".demo-private .appbar .ab-right{grid-column:3;width:100%;min-width:0;justify-content:flex-end",
+		".demo-private .appbar nav a{padding-left:10px;padding-right:10px}",
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("dashboard.html is missing demo header layout rule %q", want)
+		}
+	}
+}
+
+// Policy-backed budgets are intentionally not exposed in the user-facing
+// Usage and My team views until the policy model is ready for general use.
+func TestUserAndManagerViewsHidePolicyBudgetUI(t *testing.T) {
+	for _, file := range []string{"account.html", "manager.html"} {
+		data, err := FS.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, unwanted := range []string{`id="kpi-budget"`, `id="kpiBudgetTile"`, `>Monthly budget<`, `>Team budget<`} {
+			if bytes.Contains(data, []byte(unwanted)) {
+				t.Errorf("%s still exposes policy-backed budget UI %q", file, unwanted)
+			}
+		}
+	}
+	data, err := FS.ReadFile("account.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(".kpis{display:grid;grid-template-columns:repeat(3,1fr)")) {
+		t.Error("account.html must use three equal KPI columns after removing Monthly budget")
+	}
+}
+
+func TestAdminShowsDailyModelUsageTimeline(t *testing.T) {
+	data, err := FS.ReadFile("dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`id="admin-timeline-panel"`,
+		`id="admin-model-timeline"`,
+		`id="admin-timeline-toggle"`,
+		`api('/api/v1/dashboard/timeline?'+filters+'&group_by=model',force)`,
+		`adminTimelineMetric='tokens'`,
+		`if(adminTimelineMetric==='cost'){adminTimelineMetric='tokens';setMetricToggle('admin-timeline-toggle','atm','tokens');changed=true;}`,
+		`renderAdminTimeline();`,
+		`setMetricToggle('admin-timeline-toggle','atm',b.dataset.atm);`,
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("dashboard.html is missing admin daily model usage feature %q", want)
+		}
+	}
+}
+
 // Structural string checks cannot catch a misplaced brace: one syntax error
 // makes the browser discard the entire inline script, so the dashboard renders
 // its skeletons but never issues a single API request. Parse every inline

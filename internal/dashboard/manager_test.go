@@ -42,7 +42,7 @@ func TestManagerShowsTeamSpendKPI(t *testing.T) {
 		`tokens · '+spendReq+' requests this window'`,
 		`personView?'Person spend':(adminScope&&!drillSlug?'Org spend':'Team spend')`,
 		`document.getElementById('kSpendL').textContent='My spend';`,
-		`.demo-private #kpiSpendTile,.demo-private #kpiBudgetTile`,
+		`.demo-private #kpiSpendTile,.demo-private #approvals,.demo-private #apprBanner`,
 		// Self view must be self-pinned: /dashboard/* is admin-only and
 		// unscoped for admins, so it cannot source "My spend".
 		`/api/v1/me/usage/summary?range='+range+'&ref='+encodeURIComponent(savingsRef)`,
@@ -90,6 +90,23 @@ func TestManagerSelfChartsAndFallbackUsePersonalUsage(t *testing.T) {
 	}
 	if bytes.Contains(data, []byte("/api/v1/dashboard/")) {
 		t.Error("standalone self fallback must not require admin-only dashboard endpoints")
+	}
+}
+
+func TestManagerDemoPrivacyKeepsHeaderLayoutStable(t *testing.T) {
+	data, err := FS.ReadFile("manager.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		".demo-private .appbar{display:grid;grid-template-columns:auto auto minmax(0,1fr)",
+		".demo-private .appbar .ab-right{grid-column:3;width:100%;min-width:0;justify-content:flex-end",
+		".demo-private .appbar .ab-btn,.demo-private .appbar .ab-out{padding-left:10px;padding-right:10px;white-space:nowrap",
+		".demo-private .appbar .ab-user{max-width:240px;overflow:hidden;text-overflow:ellipsis}",
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("manager.html is missing demo header layout rule %q", want)
+		}
 	}
 }
 
