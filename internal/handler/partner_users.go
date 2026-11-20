@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -578,11 +579,23 @@ func (h *PartnerUsersHandler) mintKey(w http.ResponseWriter, r *http.Request, us
 	if err := h.store.RecordPartnerUserKey(r.Context(), actor, user.UserID, key.ID, email, body.Name); err != nil {
 		// The key is live in MaaS but we cannot hand it out. Revoke it so it
 		// does not become an orphan; log the id (never the secret) either way.
-		status, revokeErr := h.maas.RevokeUserAPIKey(r.Context(), key.ID, email, h.keyGroup)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		defer cancel()
+		status, revokeErr := h.maas.RevokeUserAPIKey(cleanupCtx, key.ID, email, h.keyGroup)
+		if revokeErr != nil || status < http.StatusOK || status >= http.StatusMultipleChoices {
+			slog.Error("partner key compensation failed; operator reconciliation required", "user_id", user.UserID, "key_id", key.ID,
+				"record_error", err, "revoke_status", status, "revoke_error", revokeErr)
+			http.Error(w, "key mint failed; operator reconciliation required", http.StatusServiceUnavailable)
+			return
+		}
 		slog.Error("partner key minted but not recorded; revoked", "user_id", user.UserID, "key_id", key.ID,
 			"record_error", err, "revoke_status", status, "revoke_error", revokeErr)
 		if errors.Is(err, storage.ErrPartnerUserInactive) {
 			http.Error(w, "user is inactive", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, storage.ErrPartnerLoginRetired) {
+			http.Error(w, "user login changed; the key was revoked, retry", http.StatusConflict)
 			return
 		}
 		http.Error(w, "key mint could not be recorded; the key was revoked, retry", http.StatusInternalServerError)

@@ -929,6 +929,9 @@ async function loadCharts(){
 //MODE:end
     if(!d||!d.overview)throw new Error(d.error||'charts failed');
     chartsCache=d;
+//MODE:standalone
+    document.getElementById('tlPanel').style.display='';
+//MODE:end
     renderTimeline(d.timeline||[]);
     renderSavedKPI(d.overview);
     renderPies();
@@ -964,22 +967,25 @@ async function loadSelfCharts(overview){
 }
 //MODE:end
 //MODE:standalone
-// Same endpoints, self-scoped by the server: a non-manager opening the page
-// sees their own pies, timeline and Saved card.
+// The fallback has no partner identity or admin rights. Use the authenticated,
+// self-pinned endpoints; the dashboard endpoints require an administrator.
 async function loadSelfCharts(){
   const generation=++chartsGeneration, requestRange=range, requestRef=savingsRef;
   try{
     const j=chartJSON;
-    const [ov,mo,us,tl]=await Promise.all([
-      j('/api/v1/dashboard/overview?range='+requestRange+'&ref='+encodeURIComponent(requestRef)),
-      j('/api/v1/dashboard/models?range='+requestRange),
-      j('/api/v1/dashboard/users?range='+requestRange+'&sort=cost_usd&order=desc&limit=10&ref='+encodeURIComponent(requestRef)),
-      j('/api/v1/dashboard/timeline?range='+requestRange+'&group_by=user')
+    const [summary,mo]=await Promise.all([
+      j('/api/v1/me/usage/summary?range='+requestRange+'&ref='+encodeURIComponent(requestRef)),
+      j('/api/v1/me/usage/models?range='+requestRange)
     ]);
     if(chartsGeneration!==generation||range!==requestRange||savingsRef!==requestRef)return;
+    if(!summary||!summary.overview||!Array.isArray(mo))throw new Error('usage failed');
+    const ov=summary.overview;
+    const us=[{username:me.user||'',display_name:me.display_name||'',
+      total_tokens:ov.total_tokens||0,requests:ov.total_requests||0,cost_usd:ov.total_cost_usd||0}];
     document.getElementById('chartsError').hidden=true;
-    chartsCache={overview:ov,models:mo,users:us,timeline:tl};
-    renderTimeline(tl||[]);
+    chartsCache={overview:ov,models:mo,users:us,timeline:[]};
+    // No self-scoped timeline endpoint is available.
+    document.getElementById('tlPanel').style.display='none';
     renderSavedKPI(ov);
     renderPies();
   }catch(e){if(chartsGeneration===generation)chartFailure(e);}
@@ -1508,43 +1514,39 @@ async function loadSelf(){
     if(usageGeneration!==generation||range!==requestRange)return;
     if(error instanceof Error&&error.message==='HTTP 403'){
       // No partner identity: the caller has no org root, so the org endpoints
-      // refuse. The dashboard rollups are self-scoped by the server, so map
-      // those UserSummary rows into the table shape — they lack the directory
-      // fields (slug, quota, last_used) — and take the budget from the
-      // caller's own quota, which init already loaded from /api/v1/whoami.
+      // refuse. The personal usage summary is pinned to the caller on the
+      // server and does not require administrator rights.
       try{
-        const self=await chartJSON('/api/v1/dashboard/users?range='+requestRange+'&sort=cost_usd&order=desc&limit=200');
+        const summary=await chartJSON('/api/v1/me/usage/summary?range='+requestRange+'&ref='+encodeURIComponent(savingsRef));
         if(usageGeneration!==generation||range!==requestRange)return;
-        // A malformed self response must fail like the main usage path
-        // (line 762), not silently render an empty "no usage" table.
-        if(!Array.isArray(self))throw new Error((self&&self.error)||'usage failed');
-        rows=self.map(u=>({
+        if(!summary||!summary.overview)throw new Error((summary&&summary.error)||'usage failed');
+        const ov=summary.overview,q=summary.quota||me.quota||null;
+        rows=[{
           // Self rows are not drillable: /api/v1/org/person refuses callers
           // without an org root (the same 403 that triggered this fallback),
           // so an empty slug keeps the click handler from opening a detail
           // dialog that can only error.
           slug:'',
-          full_name:u.display_name||u.username||'',
-          username:u.username||'',
+          full_name:me.display_name||me.user||'',
+          username:me.user||'',
           is_manager:false,
-          requests:u.requests||0,
-          total_tokens:u.total_tokens||0,
-          cost_usd:u.cost_usd||0,
-          no_identity:!u.user_id,
-          quota_exempt:!!(me.quota&&me.quota.exempt),
-          quota_enforced:me.quota?!!me.quota.enforced:true,
-          quota_usd:(me.quota&&me.quota.limit_usd)||0,
-          quota_spent_usd:(me.quota&&me.quota.spent_usd)||0,
-          over_limit:!!(me.quota&&me.quota.limit_usd&&me.quota.spent_usd>=me.quota.limit_usd)
-        }));
+          requests:ov.total_requests||0,
+          total_tokens:ov.total_tokens||0,
+          cost_usd:ov.total_cost_usd||0,
+          no_identity:true,
+          quota_exempt:!!(q&&q.exempt),
+          quota_enforced:q?!!q.enforced:true,
+          quota_usd:(q&&q.limit_usd)||0,
+          quota_spent_usd:(q&&q.spent_usd)||0,
+          over_limit:!!(q&&q.limit_usd&&q.spent_usd>=q.limit_usd)
+        }];
         renderRows();
         renderSelfSpend();
       }catch(e){
         if(usageGeneration!==generation||range!==requestRange)return;
         document.getElementById('rows').innerHTML='<tr><td colspan="6" class="err">'+esc(e instanceof Error?e.message:String(e))+'</td></tr>';
       }
-      // The org charts would 403 the same way; the dashboard chart endpoints
-      // are self-scoped, so the pies, timeline and Saved card still load.
+      // The org charts would 403 too; load the personal pies and Saved card.
 	    selfCharts=true;
       await loadSelfCharts();
     }else{

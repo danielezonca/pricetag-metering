@@ -40,3 +40,28 @@ test('successful access PATCH reconciles from the next server read even if value
  vm.runInContext(fn('admin.html','updatePartnerAccess')+'\nupdatePartnerAccess(select);',ctx);await flush();
  assert.equal(ctx.partnerUsersPendingAccess.get('user').reconcile,true);assert.equal(loads,1);
 });
+test('identity-less self fallback uses personal usage without admin endpoints',async()=>{
+ const nodes=Object.fromEntries(['rows','kSpend','kSpendS','kSpendL','chartsError','tlPanel'].map(id=>[id,{textContent:'',style:{}}]));
+ const calls=[],ov={total_cost_usd:3,total_tokens:90,total_requests:2,saved_usd:4};
+ let rendered=0,saved;
+ const ctx=vm.createContext({Error,encodeURIComponent,me:{user:'outsider',display_name:'Outside User'},document:{getElementById:id=>nodes[id]},fmt$:n=>'$'+n,fmtTok:String,esc:String,
+  chartJSON:async url=>{calls.push(url);if(url.startsWith('/api/v1/org/usage'))throw new Error('HTTP 403');if(url.startsWith('/api/v1/me/usage/summary'))return {overview:ov,quota:{limit_usd:20,spent_usd:3,enforced:true}};if(url.startsWith('/api/v1/me/usage/models'))return [{model:'own-model'}];throw new Error('unexpected admin request '+url);},
+  renderRows:()=>rendered++,renderSavedKPI:value=>saved=value,renderPies(){},loadCharts(){throw new Error('org charts must not run');},chartFailure:error=>{throw error;}});
+ vm.runInContext('var rows=[],range="mtd",savingsRef="reference",usageGeneration=0,chartsGeneration=0,selfCharts=false,chartsCache=null;'+fn('manager.html','loadSelf')+'\n'+fn('manager.html','loadSelfCharts')+'\n'+fn('manager.html','renderSelfSpend'),ctx);
+ await vm.runInContext('loadSelf()',ctx);
+ assert.equal(rendered,1);assert.equal(ctx.rows.length,1);assert.equal(ctx.rows[0].username,'outsider');assert.equal(ctx.rows[0].slug,'');assert.equal(ctx.rows[0].cost_usd,3);assert.equal(ctx.rows[0].quota_usd,20);
+ assert.equal(ctx.selfCharts,true);assert.equal(nodes.kSpend.textContent,'$3');assert.equal(nodes.tlPanel.style.display,'none');assert.equal(ctx.chartsCache.users[0].username,'outsider');assert.equal(saved.saved_usd,4);
+ assert(calls.every(url=>!url.includes('/dashboard/')));
+});
+test('partner identity self view keeps the existing org flow',async()=>{
+ let charts=0,renders=0;const expected=[{username:'member',cost_usd:5}],calls=[];
+ const ctx=vm.createContext({Error,rows:[],range:'mtd',usageGeneration:0,selfCharts:true,chartJSON:async url=>{calls.push(url);return expected;},renderRows:()=>renders++,renderSelfSpend(){},loadCharts:async()=>charts++});
+ vm.runInContext(fn('manager.html','loadSelf'),ctx);await vm.runInContext('loadSelf()',ctx);
+ assert.deepEqual(calls,['/api/v1/org/usage?range=mtd']);assert.equal(ctx.rows,expected);assert.equal(ctx.selfCharts,false);assert.equal(charts,1);assert.equal(renders,1);
+});
+test('malformed personal summary reports failure without replacing the table',async()=>{
+ const node={innerHTML:''};let renders=0;
+ const ctx=vm.createContext({Error,encodeURIComponent,range:'mtd',savingsRef:'ref',usageGeneration:0,rows:[{username:'previous'}],chartJSON:async url=>{if(url.startsWith('/api/v1/org/'))throw new Error('HTTP 403');return {};},document:{getElementById:()=>node},esc:String,renderRows:()=>renders++,renderSelfSpend(){},loadSelfCharts:async()=>{}});
+ vm.runInContext(fn('manager.html','loadSelf'),ctx);await vm.runInContext('loadSelf()',ctx);
+ assert.equal(renders,0);assert.equal(ctx.rows[0].username,'previous');assert.match(node.innerHTML,/usage failed/);
+});

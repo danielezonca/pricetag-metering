@@ -76,17 +76,20 @@ func TestManagerShowsTeamSpendKPI(t *testing.T) {
 	}
 }
 
-func TestManagerSelfChartsAndFallbackUseServerScopedRows(t *testing.T) {
+func TestManagerSelfChartsAndFallbackUsePersonalUsage(t *testing.T) {
 	data := readMode(t, "manager.html", true)
 	for _, want := range []string{
-		`j('/api/v1/dashboard/users?range='+requestRange`,
-		`chartJSON('/api/v1/dashboard/users?range='+requestRange`,
-		`chartsCache={overview:ov,models:mo,users:us,timeline:tl};`,
-		`rows=self.map(u=>({`,
+		`j('/api/v1/me/usage/summary?range='+requestRange`,
+		`j('/api/v1/me/usage/models?range='+requestRange`,
+		`chartJSON('/api/v1/me/usage/summary?range='+requestRange`,
+		`chartsCache={overview:ov,models:mo,users:us,timeline:[]};`,
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Errorf("standalone self dashboard no longer uses server-scoped rows: missing %q", want)
 		}
+	}
+	if bytes.Contains(data, []byte("/api/v1/dashboard/")) {
+		t.Error("standalone self fallback must not require admin-only dashboard endpoints")
 	}
 }
 
