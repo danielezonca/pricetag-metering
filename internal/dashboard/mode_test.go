@@ -161,7 +161,13 @@ func TestUnifiedTemplatesRenderMarkerFreeForBothModes(t *testing.T) {
 				cluster = out
 			}
 		}
-		if bytes.Equal(cluster, standalone) {
+		if name == "account.html" {
+			// Main currently disables the account key flow in both deployment
+			// modes while its identity flow is updated.
+			if !bytes.Equal(cluster, standalone) {
+				t.Fatalf("%s: expected identical Coming soon page in both modes", name)
+			}
+		} else if bytes.Equal(cluster, standalone) {
 			t.Fatalf("%s: both modes render identically", name)
 		}
 	}

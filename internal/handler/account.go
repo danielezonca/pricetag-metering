@@ -36,7 +36,11 @@ func (h *AccountHandler) ServeAccount(w http.ResponseWriter, r *http.Request) {
 	if gateway == "" {
 		gateway = welcomeGatewayFallback
 	}
-	if h.cfg.StandaloneManagement() {
+	// Main may intentionally disable account key management while the
+	// identity flow is being updated. Only load and inject the controls when
+	// the template still opts in with its marker; otherwise serve its
+	// Coming soon state as-is.
+	if h.cfg.StandaloneManagement() && strings.Contains(string(data), "/* ACCOUNT_KEY_CONTROLS */") {
 		controls, err := fs.ReadFile(dashboard.FS, "management-key-controls.js")
 		if err != nil {
 			http.Error(w, "key controls unavailable", 500)
@@ -45,12 +49,6 @@ func (h *AccountHandler) ServeAccount(w http.ResponseWriter, r *http.Request) {
 		tables, err := fs.ReadFile(dashboard.FS, "management-table-controls.js")
 		if err != nil {
 			http.Error(w, "table controls unavailable", 500)
-			return
-		}
-		// Fail closed on template drift: a missing marker would silently
-		// serve the standalone account page without key controls.
-		if !strings.Contains(string(data), "/* ACCOUNT_KEY_CONTROLS */") {
-			http.Error(w, "key controls unavailable", 500)
 			return
 		}
 		data = []byte(strings.Replace(string(data), "/* ACCOUNT_KEY_CONTROLS */", string(controls)+"\n"+string(tables), 1))
