@@ -18,6 +18,10 @@ func TestPartnerUserDirectoryPolicyAndHistoricalUsage(t *testing.T) {
 	if !user.Active || user.UserID != id {
 		t.Fatalf("created user = %#v", user)
 	}
+	// The historical key was issued while this login was still current.
+	if err := s.RecordPartnerUserKey(ctx, "partner-m2m", id, "key-old", "alice@example.com", "old"); err != nil {
+		t.Fatalf("RecordPartnerUserKey: %v", err)
+	}
 
 	_, err = s.UpdatePartnerUser(ctx, "partner-m2m", id, map[string]any{
 		"email": "alice.new@example.com", "first_name": "Alice", "last_name": "Example", "manager_uuid": nil,
@@ -88,9 +92,6 @@ func TestPartnerUserDirectoryPolicyAndHistoricalUsage(t *testing.T) {
 		t.Fatalf("historical usage report = %#v", report)
 	}
 
-	if err := s.RecordPartnerUserKey(ctx, "partner-m2m", id, "key-old", "alice@example.com", "old"); err != nil {
-		t.Fatalf("RecordPartnerUserKey: %v", err)
-	}
 	if err := s.RecordPartnerUserKey(ctx, "partner-m2m", id, "key-new", "alice.new@example.com", "new"); err != nil {
 		t.Fatalf("RecordPartnerUserKey: %v", err)
 	}

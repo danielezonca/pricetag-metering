@@ -23,6 +23,7 @@ var (
 	ErrPartnerUserRevocationPending = errors.New("partner user key revocation is pending")
 	ErrInvalidPartnerUser           = errors.New("invalid partner user")
 	ErrInvalidPartnerUserQuery      = errors.New("invalid partner user query")
+	ErrPartnerLoginRetired          = errors.New("subject is not the account's current login")
 )
 
 const (
@@ -654,6 +655,18 @@ func (s *Store) RecordPartnerUserKey(ctx context.Context, actor, userID, keyID, 
 	}
 	if !active || revocationPending {
 		return ErrPartnerUserInactive
+	}
+	// Renames acquire the same profile lock. Verify the mint still belongs to
+	// the current login after that lock, so a rename during the outbound mint
+	// causes the caller to compensate by revoking the unrecorded key.
+	var currentLogin string
+	if err := tx.QueryRowContext(ctx, `SELECT username FROM partner_user_logins WHERE user_id=$1 AND is_current`, id).Scan(&currentLogin); errors.Is(err, sql.ErrNoRows) {
+		return ErrPartnerLoginRetired
+	} else if err != nil {
+		return err
+	}
+	if !strings.EqualFold(currentLogin, strings.TrimSpace(username)) {
+		return ErrPartnerLoginRetired
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO partner_user_keys (key_id,user_id,username,name,created_by) VALUES ($1,$2,$3,$4,$5)`, keyID, id, username, name, actor); err != nil {
 		return fmt.Errorf("record partner key: %w", err)

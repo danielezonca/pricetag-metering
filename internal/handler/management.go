@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
@@ -88,6 +89,15 @@ func NewManagementHandler(store *storage.Store, cfg config.Config) http.HandlerF
 			// account, which a plain string comparison would miss.
 			actorID, actorErr := store.PartnerUserIDByLogin(r.Context(), actor)
 			targetID, targetErr := store.PartnerUserIDByLogin(r.Context(), body.Subject)
+			if actor != "management-service" && actorErr != nil &&
+				(!errors.Is(actorErr, storage.ErrPartnerUserNotFound) || !IsSuperAdmin(cfg, r)) {
+				http.Error(w, "administrator identity unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if targetErr != nil && !errors.Is(targetErr, storage.ErrPartnerUserNotFound) {
+				http.Error(w, "account directory unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			if actorErr == nil && targetErr == nil && actorID == targetID && ((body.Active != nil && !*body.Active) || (body.Role != "" && body.Role != storage.PartnerRoleSuperAdmin)) {
 				http.Error(w, "cannot remove own management access", 400)
 				return
@@ -96,10 +106,8 @@ func NewManagementHandler(store *storage.Store, cfg config.Config) http.HandlerF
 			// current login: a retained (renamed-away) spelling resolves to
 			// the owning account, so accepting it would silently edit that
 			// account instead of reporting that the requested login is
-			// taken. A suspended target keeps the permissive path — its
-			// current login is not resolvable while inactive, and
-			// reactivating a suspended account by its listed login is a
-			// supported flow.
+			// taken. ProvisionLogin repeats this check under the profile lock,
+			// including suspended targets and concurrent renames.
 			if targetErr == nil {
 				if current, curErr := store.CurrentPartnerUserLogin(r.Context(), targetID); curErr == nil &&
 					!strings.EqualFold(current, strings.TrimSpace(body.Subject)) {
@@ -109,6 +117,10 @@ func NewManagementHandler(store *storage.Store, cfg config.Config) http.HandlerF
 			}
 			user, err := store.ProvisionLogin(r.Context(), actor, body)
 			if err != nil {
+				if errors.Is(err, storage.ErrPartnerLoginRetired) {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
 				http.Error(w, "user update rejected", 400)
 				return
 			}

@@ -6,7 +6,7 @@ const el=id=>document.getElementById(id);
 async function api(path,method='GET',body){const r=await fetch(path,{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const text=await r.text();if(!r.ok)throw new Error(text||('Request failed: HTTP '+r.status));return text?JSON.parse(text):{};}
 const values=form=>Object.fromEntries(new FormData(form));
 function report(fn,notify=true){return async event=>{if(event)event.preventDefault();el('status').textContent='Working…';try{await fn();el('status').textContent='Done';if(notify)showToast('Saved','success');}catch(e){el('status').textContent=e.message;showToast(e.message,'error');}};}
-function bind(id,fn,notify=true){el(id).addEventListener('submit',KeyControls.singleFlight(el(id), report(()=>fn(values(el(id))),notify)));}
+function bind(id,fn,notify=true){el(id).addEventListener('submit',KeyControls.singleFlight(el(id), report(()=>fn(values(el(id))),notify),()=>id!=='budget'||!el('budget').elements.monthly_usd.disabled));}
 let userActiveBaseline;
 // An edit populated from the directory omits an unchanged active flag: the
 // form value can be stale if the account was suspended elsewhere, and
@@ -216,7 +216,7 @@ for(const [id,search] of [['priceSearch',()=>{priceOffset=0;renderPrices();}],['
  let timer;el(id).elements.search.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(search,200);});
 }
 
-let userGeneration=0,deferredDirectory=null;
+let userGeneration=0,deferredDirectory=null,budgetInitialized=false;
 // applyDirectory repopulates one subject picker from a directory page. The
 // onboarding picker hides suspended identities; both pickers keep the current
 // selection when it survives, and a lost selection reloads whatever depends
@@ -230,7 +230,7 @@ function applyDirectory(select,users){
  // delivery panel — still labeled with that subject — until it is explicitly
  // dismissed or superseded by a new issuance.
  if(select===el('onboard').elements.subject)updateViewLinks();
- if(select===el('budget').elements.subject&&select.value!==previous)loadSelectedBudget().catch(()=>{});
+ if(budgetInitialized&&select===el('budget').elements.subject&&select.value!==previous)loadSelectedBudget().catch(()=>{});
 }
 async function loadUsers(){
  // The endpoint pages the directory (limit/offset like the budgets listing);
@@ -265,11 +265,19 @@ async function loadUsers(){
   if(select.disabled){deferredDirectory=users;continue;}
   applyDirectory(select,users);
  }
+ // Initialize from the directory walk that actually owns the pickers. A
+ // superseded bootstrap walk must never run a continuation that clears a
+ // draft enabled by a newer refresh.
+ if(!budgetInitialized){
+  budgetInitialized=true;
+  updateViewLinks();
+  await (activeTab==='user-quota'?updateBudgetViews():loadSelectedBudget());
+ }
 }
 window.refreshManagedPrices=report(loadPrices,false);
 window.refreshManagedBudgets=report(updateBudgetViews,false);
 window.refreshManagedUsers=report(loadUsers,false);
 if(activeTab==='model-pricing')window.refreshManagedPrices();
-loadUsers().then(()=>{updateViewLinks();return activeTab==='user-quota'?updateBudgetViews():loadSelectedBudget();}).catch(error => {el('status').textContent=error.message;showToast(error.message,'error');});
+loadUsers().catch(error => {el('status').textContent=error.message;showToast(error.message,'error');});
 })();
 </script>

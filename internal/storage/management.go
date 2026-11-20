@@ -105,6 +105,16 @@ func (s *Store) ProvisionLogin(ctx context.Context, actor string, p LoginProvisi
 	if _, err = tx.ExecContext(ctx, `SELECT user_id FROM partner_users WHERE user_id=$1 FOR UPDATE`, id); err != nil {
 		return PartnerUser{}, err
 	}
+	// Check after locking the profile, including suspended accounts: aliases
+	// remain attributable for usage, but must never provision or reactivate
+	// the account whose current login has changed.
+	var currentLogin string
+	if err := tx.QueryRowContext(ctx, `SELECT username FROM partner_user_logins WHERE user_id=$1 AND is_current`, id).Scan(&currentLogin); err != nil {
+		return PartnerUser{}, err
+	}
+	if !strings.EqualFold(currentLogin, p.Subject) {
+		return PartnerUser{}, ErrPartnerLoginRetired
+	}
 	if p.Name != "" {
 		if _, err = tx.ExecContext(ctx, `UPDATE partner_users SET tags=tags||jsonb_build_object('first_name',$2::text),updated_by=$3,updated_at=now() WHERE user_id=$1`, id, p.Name, actor); err != nil {
 			return PartnerUser{}, err

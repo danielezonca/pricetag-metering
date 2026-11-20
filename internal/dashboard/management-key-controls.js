@@ -1,7 +1,7 @@
 // Shared by the existing Administration page and My keys. Secrets stay in
 // closures: never in HTML, attributes, local/session storage or status messages.
 const KeyControls = (() => {
-  function singleFlight(form, fn) {
+  function singleFlight(form, fn, canSubmit = () => true) {
     let pending = false;
     return async (...args) => {
       if (args[0] && typeof args[0].preventDefault === 'function') args[0].preventDefault();
@@ -11,7 +11,7 @@ const KeyControls = (() => {
       const previous = buttons.map(button => button.disabled);
       buttons.forEach(button => button.disabled = true);
       try { return await fn(...args); }
-      finally { pending = false; buttons.forEach((button, i) => button.disabled = previous[i]); }
+      finally { pending = false; buttons.forEach((button, i) => button.disabled = previous[i] || !canSubmit()); }
     };
   }
   function expiry(key) { return key.expirationDate || key.expiresAt; }

@@ -11,9 +11,15 @@ import (
 )
 
 func (s *Store) GetPricingDiscountPolicy(ctx context.Context) (pricing.DiscountPolicy, error) {
+	return getPricingDiscountPolicy(ctx, s.db)
+}
+
+func getPricingDiscountPolicy(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (pricing.DiscountPolicy, error) {
 	var raw []byte
 	var version string
-	err := s.db.QueryRowContext(ctx, `SELECT version, rules FROM pricing_discount_policy WHERE id = true`).Scan(&version, &raw)
+	err := db.QueryRowContext(ctx, `SELECT version, rules FROM pricing_discount_policy WHERE id = true`).Scan(&version, &raw)
 	if err == sql.ErrNoRows {
 		return pricing.DefaultDiscountPolicy(), nil
 	}

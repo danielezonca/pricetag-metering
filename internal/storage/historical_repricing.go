@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -70,14 +71,14 @@ func newOperationID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func (s *Store) pricingSnapshotHash(ctx context.Context, where string, args []any, policyVersion string) (string, error) {
+func (s *Store) pricingSnapshotHash(ctx context.Context, tx *sql.Tx, where string, args []any, policyVersion string) (string, error) {
 	q := fmt.Sprintf(`SELECT COALESCE(p.model,''), COALESCE(p.provider,''),
 		COALESCE(p.input_cost_per_mtok,0), COALESCE(p.output_cost_per_mtok,0),
 		COALESCE(p.cache_read_cost_per_mtok,0), COALESCE(p.cache_write_cost_per_mtok,0)
 		FROM usage_events e LEFT JOIN model_pricing p ON p.model=e.model
 		WHERE %s GROUP BY p.model,p.provider,p.input_cost_per_mtok,p.output_cost_per_mtok,p.cache_read_cost_per_mtok,p.cache_write_cost_per_mtok
 		ORDER BY p.model,p.provider`, where[5:])
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return "", err
 	}
@@ -174,7 +175,15 @@ func (s *Store) RepriceHistorical(ctx context.Context, actor string, req Histori
 	if req.Policy == "" {
 		return HistoricalRepriceResult{}, fmt.Errorf("policy_version is required")
 	}
-	activePolicy, err := s.GetPricingDiscountPolicy(ctx)
+	// The preview, hash, and copied rates must describe one snapshot. Keep
+	// that snapshot short: chunk writes use the copied rates, allowing future
+	// price changes without blocking them for the whole historical run.
+	snapshot, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return HistoricalRepriceResult{}, err
+	}
+	defer func() { _ = snapshot.Rollback() }()
+	activePolicy, err := getPricingDiscountPolicy(ctx, snapshot)
 	if err != nil {
 		return HistoricalRepriceResult{}, fmt.Errorf("load active pricing policy: %w", err)
 	}
@@ -190,14 +199,21 @@ func (s *Store) RepriceHistorical(ctx context.Context, actor string, req Histori
 		WHERE %s`, currentPriceUSDExpr, where[5:])
 	var result HistoricalRepriceResult
 	result.From, result.Until, result.Policy = req.From, req.Until, req.Policy
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&result.Rows, &result.OldTotal, &result.NewTotal); err != nil {
+	if err := snapshot.QueryRowContext(ctx, query, args...).Scan(&result.Rows, &result.OldTotal, &result.NewTotal); err != nil {
 		return HistoricalRepriceResult{}, err
 	}
-	snapshotHash, err := s.pricingSnapshotHash(ctx, where, args, req.Policy)
+	snapshotHash, err := s.pricingSnapshotHash(ctx, snapshot, where, args, req.Policy)
 	if err != nil {
 		return HistoricalRepriceResult{}, fmt.Errorf("create pricing snapshot: %w", err)
 	}
 	result.PolicyHash = snapshotHash
+	var ratesJSON []byte
+	if err := snapshot.QueryRowContext(ctx, `SELECT COALESCE(json_agg(p), '[]'::json) FROM model_pricing p`).Scan(&ratesJSON); err != nil {
+		return HistoricalRepriceResult{}, fmt.Errorf("copy pricing snapshot: %w", err)
+	}
+	if err := snapshot.Commit(); err != nil {
+		return HistoricalRepriceResult{}, err
+	}
 	if !req.Confirm {
 		id, err := newOperationID()
 		if err != nil {
@@ -255,10 +271,7 @@ func (s *Store) RepriceHistorical(ctx context.Context, actor string, req Histori
 		if err != nil {
 			return HistoricalRepriceResult{}, err
 		}
-		update := fmt.Sprintf(`UPDATE usage_events u SET cost_usd = r.new_cost
-			FROM (SELECT e.id, %s AS new_cost FROM usage_events e LEFT JOIN model_pricing p ON p.model=e.model WHERE %s) r
-			WHERE u.id=r.id`, currentPriceUSDExpr, chunkWhere[5:])
-		if _, err = tx.ExecContext(ctx, update, chunkArgs...); err == nil {
+		if err = repriceChunk(ctx, tx, chunkWhere, chunkArgs, ratesJSON, s.monthSpendWrites.Load()); err == nil {
 			_, err = tx.ExecContext(ctx, rebuildHourLockSQL, hour, chunkUntil)
 		}
 		if err == nil {
@@ -313,6 +326,33 @@ func (s *Store) RepriceHistorical(ctx context.Context, actor string, req Histori
 		slog.Warn("failed to invalidate shared rollup parity state", "error", err)
 	}
 	return result, nil
+}
+
+func repriceChunk(ctx context.Context, tx *sql.Tx, where string, args []any, ratesJSON []byte, updateMonthSpend bool) error {
+	args = append(args, string(ratesJSON))
+	// Lock and retain the old charges before updating. The delta and ledger
+	// changes then commit together; concurrent ingest adds to the accumulator
+	// rather than being overwritten by a reconstruction from an older snapshot.
+	query := fmt.Sprintf(`WITH old AS MATERIALIZED (
+		SELECT e.id, e.username, date_trunc('month', e.timestamp)::date AS month,
+		       e.cost_usd AS old_cost, %s AS new_cost
+		FROM usage_events e
+		LEFT JOIN jsonb_populate_recordset(NULL::model_pricing, $%d::jsonb) p ON p.model=e.model
+		WHERE %s FOR UPDATE OF e
+	), updated AS (
+		UPDATE usage_events u SET cost_usd = r.new_cost FROM old r WHERE u.id=r.id
+		RETURNING r.username, r.month, u.cost_usd - COALESCE(r.old_cost,0) AS delta
+	) `, currentPriceUSDExpr, len(args), where[5:])
+	if updateMonthSpend {
+		query += `INSERT INTO user_month_spend (username, month, spent_usd)
+			SELECT username, month, SUM(delta) FROM updated GROUP BY username, month ORDER BY username, month
+			ON CONFLICT (username, month) DO UPDATE SET
+			spent_usd=user_month_spend.spent_usd+EXCLUDED.spent_usd, updated_at=NOW()`
+	} else {
+		query += `SELECT COUNT(*) FROM updated`
+	}
+	_, err := tx.ExecContext(ctx, query, args...)
+	return err
 }
 
 // repriceHourBounds returns UTC hour buckets covering the request. The

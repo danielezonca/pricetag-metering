@@ -67,3 +67,13 @@ test('downloads use sanitized issuance names, keep key content unchanged, and re
  d.set({key:'fixture-secret'},{subject:'a'.repeat(100),name:'b'.repeat(100)});d.download();assert.ok(link.download.length<150);
  d.clear();assert.throws(()=>d.download());d.set({key:'next-fixture'});d.download();assert.equal(link.download,'pricetag.key');
 });
+
+test('submission cleanup preserves a loader failure and permits retry after successful load',async()=>{
+ const c=controls(),button={disabled:false},form={querySelectorAll:()=>[button]};
+ let loaded=true;
+ const run=c.singleFlight(form,async()=>{loaded=false;button.disabled=true;},()=>loaded);
+ await run();assert.equal(button.disabled,true);
+ loaded=true;button.disabled=false;
+ const recovered=c.singleFlight(form,async()=>{},()=>loaded);
+ await recovered();assert.equal(button.disabled,false);
+});

@@ -638,7 +638,7 @@ func (h *PartnerUsersHandler) revokeTracked(r *http.Request, userID string, key 
 	if err != nil {
 		return err
 	}
-	if status >= http.StatusBadRequest && status != http.StatusNotFound {
+	if status != http.StatusNotFound && (status < http.StatusOK || status >= http.StatusMultipleChoices) {
 		return fmt.Errorf("maas-api revoke status %d", status)
 	}
 	return h.store.MarkPartnerUserKeyRevoked(r.Context(), partnerActor(r), userID, key.KeyID)
