@@ -29,6 +29,14 @@ func (h *DashboardHandler) ServeDashboard(w http.ResponseWriter, r *http.Request
 		http.Error(w, "dashboard not found", http.StatusInternalServerError)
 		return
 	}
+	data, err = dashboard.ForMode(data, h.cfg.StandaloneManagement())
+	if err != nil {
+		http.Error(w, "dashboard not available", http.StatusInternalServerError)
+		return
+	}
+	if h.cfg.StandaloneManagement() {
+		data = dashboard.WithSessionDialog(data)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")

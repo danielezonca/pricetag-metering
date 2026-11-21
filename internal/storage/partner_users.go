@@ -23,6 +23,7 @@ var (
 	ErrPartnerUserRevocationPending = errors.New("partner user key revocation is pending")
 	ErrInvalidPartnerUser           = errors.New("invalid partner user")
 	ErrInvalidPartnerUserQuery      = errors.New("invalid partner user query")
+	ErrPartnerLoginRetired          = errors.New("subject is not the account's current login")
 )
 
 const (
@@ -32,9 +33,13 @@ const (
 )
 
 const (
-	partnerUserMaxTags      = 100
-	partnerUserMaxTagValue  = 2048
-	partnerUserMaxListLimit = 100
+	partnerUserMaxTags     = 100
+	partnerUserMaxTagValue = 2048
+	// Largest page the listings advertise: the management route accepts
+	// {50,100,250,500} and the standalone admin console paginates with
+	// limit=500, so the store must honor every advertised size (the admin
+	// table route additionally clamps to 200).
+	partnerUserMaxListLimit = 500
 )
 
 var (
@@ -308,6 +313,26 @@ func (s *Store) ListAllPartnerUsers(ctx context.Context) ([]PartnerUser, error) 
 	return users, rows.Err()
 }
 
+// ListAllPartnerUsersAnyState returns every partner user regardless of active
+// state. It backs the standalone directory's unpaged state=all branch, which
+// must include suspended accounts rather than silently dropping them.
+func (s *Store) ListAllPartnerUsersAnyState(ctx context.Context) ([]PartnerUser, error) {
+	rows, err := s.db.QueryContext(ctx, partnerUserSelect+` ORDER BY p.created_at, p.user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []PartnerUser
+	for rows.Next() {
+		user, err := scanPartnerUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}
+
 // ListPartnerUsersPage returns one active Partner-user page, the total number
 // of active users matching the (optional) search, and whether a later page
 // exists. search is a case-insensitive substring matched against email, first
@@ -525,24 +550,28 @@ func (s *Store) UpdatePartnerUserAccess(ctx context.Context, actor, userID, role
 		return PartnerUser{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM partner_users WHERE user_id=$1)`, id).Scan(&exists); err != nil {
+	var currentManager sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT manager_user_id::text FROM partner_users WHERE user_id=$1 FOR UPDATE`, id).Scan(&currentManager); errors.Is(err, sql.ErrNoRows) {
+		return PartnerUser{}, ErrPartnerUserNotFound
+	} else if err != nil {
 		return PartnerUser{}, err
 	}
-	if !exists {
-		return PartnerUser{}, ErrPartnerUserNotFound
-	}
 	if manager != nil {
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM partner_users WHERE user_id=$1 AND active)`, *manager).Scan(&exists); err != nil {
-			return PartnerUser{}, err
-		}
-		if !exists {
-			return PartnerUser{}, ErrPartnerUserNotFound
-		}
-		// Reject cycles: the proposed manager must not already report (directly
-		// or transitively) to this user, which would make the hierarchy loop.
-		var cycle bool
-		if err := tx.QueryRowContext(ctx, `
+		preservingManager := currentManager.Valid && currentManager.String == *manager
+		if !preservingManager {
+			var managerActive bool
+			if err := tx.QueryRowContext(ctx, `SELECT active FROM partner_users WHERE user_id=$1`, *manager).Scan(&managerActive); errors.Is(err, sql.ErrNoRows) {
+				return PartnerUser{}, ErrPartnerUserNotFound
+			} else if err != nil {
+				return PartnerUser{}, err
+			}
+			if !managerActive {
+				return PartnerUser{}, ErrPartnerUserInactive
+			}
+			// Reject cycles: a newly selected manager must not already report
+			// (directly or transitively) to this user, which would loop the tree.
+			var cycle bool
+			if err := tx.QueryRowContext(ctx, `
 			WITH RECURSIVE up(user_id, depth, path) AS (
 				SELECT $1::uuid, 0, ARRAY[$1::uuid]
 				UNION ALL
@@ -552,10 +581,11 @@ func (s *Store) UpdatePartnerUserAccess(ctx context.Context, actor, userID, role
 				WHERE p.manager_user_id IS NOT NULL AND u.depth < 1000 AND NOT p.manager_user_id = ANY(u.path)
 			)
 			SELECT EXISTS(SELECT 1 FROM up WHERE user_id = $2::uuid)`, *manager, id).Scan(&cycle); err != nil {
-			return PartnerUser{}, err
-		}
-		if cycle {
-			return PartnerUser{}, fmt.Errorf("%w: manager assignment would create a cycle", ErrInvalidPartnerUser)
+				return PartnerUser{}, err
+			}
+			if cycle {
+				return PartnerUser{}, fmt.Errorf("%w: manager assignment would create a cycle", ErrInvalidPartnerUser)
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -625,6 +655,18 @@ func (s *Store) RecordPartnerUserKey(ctx context.Context, actor, userID, keyID, 
 	}
 	if !active || revocationPending {
 		return ErrPartnerUserInactive
+	}
+	// Renames acquire the same profile lock. Verify the mint still belongs to
+	// the current login after that lock, so a rename during the outbound mint
+	// causes the caller to compensate by revoking the unrecorded key.
+	var currentLogin string
+	if err := tx.QueryRowContext(ctx, `SELECT username FROM partner_user_logins WHERE user_id=$1 AND is_current`, id).Scan(&currentLogin); errors.Is(err, sql.ErrNoRows) {
+		return ErrPartnerLoginRetired
+	} else if err != nil {
+		return err
+	}
+	if !strings.EqualFold(currentLogin, strings.TrimSpace(username)) {
+		return ErrPartnerLoginRetired
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO partner_user_keys (key_id,user_id,username,name,created_by) VALUES ($1,$2,$3,$4,$5)`, keyID, id, username, name, actor); err != nil {
 		return fmt.Errorf("record partner key: %w", err)

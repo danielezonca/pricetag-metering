@@ -17,6 +17,7 @@ import (
 var (
 	ErrModelAccessRoleNotFound   = errors.New("model access role not found")
 	ErrModelAccessRoleNameExists = errors.New("model access role name already exists")
+	ErrModelAccessDefaultExists  = errors.New("default role already exists; confirm replace_default to replace it")
 	ErrInvalidModelAccessRole    = errors.New("invalid model access role")
 	ErrInvalidModelAccessModel   = errors.New("invalid model identifier")
 	ErrCannotRetireDefaultRole   = errors.New("cannot retire the default role; create or assign another default first")
@@ -171,10 +172,74 @@ func (s *Store) GetModelAccessRole(ctx context.Context, tenantID, roleID string)
 }
 
 func (s *Store) CreateModelAccessRole(ctx context.Context, tenantID, actor, name, description string, models []string, isDefault bool, monthlyUSD float64) (ModelAccessRole, error) {
-	return s.CreateModelAccessRoleWithTokens(ctx, tenantID, actor, name, description, models, isDefault, monthlyUSD, 0)
+	return s.CreateModelAccessRoleWithTokens(ctx, tenantID, actor, name, description, models, isDefault, monthlyUSD, 0, "")
 }
 
-func (s *Store) CreateModelAccessRoleWithTokens(ctx context.Context, tenantID, actor, name, description string, models []string, isDefault bool, monthlyUSD float64, monthlyTokens int64) (ModelAccessRole, error) {
+// GetModelAccessRoleByRequestID returns the role created with a given
+// idempotency key, if any. The create endpoint stores the client's
+// create_request_id so a retry of a lost response recovers the role it
+// actually created instead of failing on a name conflict.
+func (s *Store) GetModelAccessRoleByRequestID(ctx context.Context, tenantID, requestID string) (ModelAccessRole, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.role_id::text, r.tenant_id::text, r.name, r.description,
+		       COALESCE(r.owner_subject_id::text, ''), r.is_default, r.monthly_usd, r.monthly_tokens,
+		       COALESCE(array_agg(rm.model_id ORDER BY rm.model_id)
+		                FILTER (WHERE rm.model_id IS NOT NULL), '{}')::text[],
+		       CASE WHEN r.is_default THEN (
+		         SELECT COUNT(*) FROM policy_subjects s
+		         WHERE s.tenant_id = r.tenant_id
+		           AND s.principal_type = 'partner_user'
+		           AND s.status = 'active'
+		           AND NOT EXISTS (
+		             SELECT 1 FROM model_access_default_exclusions e
+		             WHERE e.tenant_id = s.tenant_id AND e.subject_id = s.subject_id
+		               AND (e.expires_at IS NULL OR e.expires_at > NOW())
+		           )
+		       ) ELSE (
+		         SELECT COUNT(*) FROM model_access_role_assignments a
+		         WHERE a.tenant_id = r.tenant_id AND a.role_id = r.role_id
+		       ) END,
+		       r.retired_at, r.created_at, r.updated_at
+		FROM model_access_roles r
+		LEFT JOIN model_access_role_models rm
+		  ON rm.tenant_id = r.tenant_id AND rm.role_id = r.role_id
+		WHERE r.tenant_id = $1 AND r.create_request_id = $2
+		GROUP BY r.role_id`, tenantID, requestID)
+	if err != nil {
+		return ModelAccessRole{}, fmt.Errorf("lookup model access role by request id: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return ModelAccessRole{}, fmt.Errorf("lookup model access role by request id: %w", err)
+		}
+		return ModelAccessRole{}, ErrModelAccessRoleNotFound
+	}
+	var role ModelAccessRole
+	var models []string
+	var retired sql.NullTime
+	if err := rows.Scan(&role.RoleID, &role.TenantID, &role.Name, &role.Description,
+		&role.OwnerSubjectID, &role.IsDefault, &role.MonthlyUSD, &role.MonthlyTokens, pq.Array(&models), &role.SubjectCount,
+		&retired, &role.CreatedAt, &role.UpdatedAt); err != nil {
+		return ModelAccessRole{}, err
+	}
+	if retired.Valid {
+		role.RetiredAt = &retired.Time
+	}
+	role.Models = models
+	if role.Models == nil {
+		role.Models = []string{}
+	}
+	return role, nil
+}
+
+func (s *Store) CreateModelAccessRoleWithTokens(ctx context.Context, tenantID, actor, name, description string, models []string, isDefault bool, monthlyUSD float64, monthlyTokens int64, createRequestID string) (ModelAccessRole, error) {
+	// Preserve the internal helper's replacement behavior. HTTP creates use
+	// CreateModelAccessRoleWithReplacement with the caller's explicit consent.
+	return s.CreateModelAccessRoleWithReplacement(ctx, tenantID, actor, name, description, models, isDefault, monthlyUSD, monthlyTokens, createRequestID, true)
+}
+
+func (s *Store) CreateModelAccessRoleWithReplacement(ctx context.Context, tenantID, actor, name, description string, models []string, isDefault bool, monthlyUSD float64, monthlyTokens int64, createRequestID string, replaceDefault bool) (ModelAccessRole, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 120 {
 		return ModelAccessRole{}, fmt.Errorf("%w: name required, max 120 bytes", ErrInvalidModelAccessRole)
@@ -195,6 +260,20 @@ func (s *Store) CreateModelAccessRoleWithTokens(ctx context.Context, tenantID, a
 		return ModelAccessRole{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if isDefault {
+		// An advisory lock covers the empty-default case too, where no row
+		// exists to lock. Every default create uses the same tenant lock.
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('model-access-default'), hashtext($1))`, tenantID); err != nil {
+			return ModelAccessRole{}, err
+		}
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_access_roles WHERE tenant_id=$1 AND is_default AND retired_at IS NULL)`, tenantID).Scan(&exists); err != nil {
+			return ModelAccessRole{}, err
+		}
+		if exists && !replaceDefault {
+			return ModelAccessRole{}, ErrModelAccessDefaultExists
+		}
+	}
 	var retiredAt sql.NullTime
 	switch err := tx.QueryRowContext(ctx, `
 		SELECT retired_at FROM model_access_roles
@@ -216,9 +295,9 @@ func (s *Store) CreateModelAccessRoleWithTokens(ctx context.Context, tenantID, a
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO model_access_roles
-			(role_id, tenant_id, name, description, is_default, monthly_usd, monthly_tokens, created_by, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-		roleID, tenantID, name, strings.TrimSpace(description), isDefault, monthlyUSD, monthlyTokens, actor); err != nil {
+			(role_id, tenant_id, name, description, is_default, monthly_usd, monthly_tokens, created_by, updated_by, create_request_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, NULLIF($9, ''))`,
+		roleID, tenantID, name, strings.TrimSpace(description), isDefault, monthlyUSD, monthlyTokens, actor, createRequestID); err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 			return ModelAccessRole{}, fmt.Errorf("%w: %q is already in use", ErrModelAccessRoleNameExists, name)

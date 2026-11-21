@@ -50,3 +50,30 @@ func TestLegacyCreateKeyRejectsUnapprovedGroup(t *testing.T) {
 		t.Fatal("unapproved group reached maas-api instead of being rejected")
 	}
 }
+
+func TestStandaloneLegacyCreateKeyRequiresAdministrator(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer server.Close()
+
+	cfg := config.Config{
+		DeploymentMode: config.DeploymentModeStandalone,
+		UserHeader:     "X-Forwarded-User",
+		GroupsHeader:   "X-Forwarded-Groups",
+	}
+	handler := NewAdminHandler(nil, maasapi.NewClient(server.URL, "test-tenant"), cfg)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/keys", strings.NewReader(`{"keyName":"atlas"}`))
+	request.Header.Set(cfg.UserHeader, "alice")
+	recorder := httptest.NewRecorder()
+
+	handler.HandleKeys(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if called {
+		t.Fatal("standalone personal key creation bypassed /api/v1/me/keys")
+	}
+}

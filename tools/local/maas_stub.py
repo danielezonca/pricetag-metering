@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 # API-key login fixtures.
@@ -117,7 +117,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path.endswith("/internal/v1/api-keys/validate"):
             username = VALIDATION_IDENTITIES.get((body or {}).get("key", ""), "")
-            self._send(200, {"valid": bool(username), "username": username, "groups": []})
+            # A real deployment's login response carries the identity's EnMaaS
+            # groups (from the IdP in cluster mode). Cluster-mode key minting
+            # requires one; standalone mode uses PARTNER_USER_KEY_GROUP instead
+            # and ignores this list.
+            self._send(200, {"valid": bool(username), "username": username, "groups": ["dogfood-team"] if username else []})
             return
 
         if path == "/v1/api-keys/search":
@@ -159,6 +163,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send(201, response)
             return
 
+        if path == "/v1/api-keys/bulk-revoke":
+            # Standalone management key revocation (maasapi.RevokeAllUserAPIKeys)
+            # revokes every key of one login. The stub scopes by username; the
+            # X-MaaS-Group header the metering sends is not modeled because
+            # stub keys carry no group. Dry runs count without mutating, and a
+            # second run reports zero: revocation is idempotent.
+            username = (body.get("username") or "").strip() or self._username()
+            if not username:
+                self._send(400, {"error": "missing username"})
+                return
+            revocable = [k for k in KEYS.get(username, []) if k.get("status") not in ("revoked", "deleted")]
+            if not body.get("dryRun"):
+                for key in revocable:
+                    key["status"] = "revoked"
+            self._send(200, {"revokedCount": len(revocable)})
+            return
+
         self._send(404, {"error": "not found"})
 
     def do_DELETE(self):  # noqa: N802
@@ -183,4 +204,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    HTTPServer(("0.0.0.0", 8081), Handler).serve_forever()
+    # ThreadingHTTPServer, not HTTPServer: the handler speaks HTTP/1.1 with
+    # keep-alive, so a single-threaded server parks on one pooled connection
+    # (for example the login validator) and every other client — key minting
+    # uses a separate pooled client — starves in the accept queue. One thread
+    # per connection matches what a real MaaS deployment serves.
+    ThreadingHTTPServer(("0.0.0.0", 8081), Handler).serve_forever()

@@ -12,20 +12,14 @@ import (
 )
 
 func TestToolPieShowsTopNinePlusOther(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	if !bytes.Contains(data, []byte("function(d){return d.tool;},9)")) {
 		t.Error("tool pie no longer limits to the top 9 tools plus an Other row")
 	}
 }
 
 func TestDashboardToolMetricToggle(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"let modelMetric='tokens', userPieMetric='cost', toolMetric='tokens';",
 		"id=\"tool-metric-toggle\"",
@@ -40,11 +34,25 @@ func TestDashboardToolMetricToggle(t *testing.T) {
 	}
 }
 
-func TestDashboardEscapesUserControlledIdentityFields(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
+func TestManagementUserSaveKeepsDirectoryRefreshWarning(t *testing.T) {
+	data, err := FS.ReadFile("management-admin-script.html")
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, want := range []string{
+		"await api('/api/v1/management/users','PUT',payload)",
+		"void loadUsers().catch(error=>{const message='Saved, but the user list failed to refresh: '+error.message",
+		"showToast(message,'error')",
+		"showToast('Saved','success');},false)",
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("management user save does not preserve successful-save and refresh status %q", want)
+		}
+	}
+}
+
+func TestDashboardEscapesUserControlledIdentityFields(t *testing.T) {
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"pmEsc(nameByUser[n])",
 		"${pmEsc(r.model||'—')}",
@@ -58,10 +66,7 @@ func TestDashboardEscapesUserControlledIdentityFields(t *testing.T) {
 }
 
 func TestTopUsersRankShowsCountryCostCenterAndDemoPrivacy(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"function userCostCenter(tags)",
 		"var country=item.tags&&item.tags.country;",
@@ -184,10 +189,7 @@ func TestTopUsersRankUsesColumnMajorOrderingOnNarrowScreens(t *testing.T) {
 // esc() in admin.html was text-safe but not attribute-safe, and the pie legend's
 // local html() helper left double quotes intact inside a title="..." attribute.
 func TestDashboardPieLegendTitleEscapesQuotes(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		`function pmEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,`,
 		"var text=pmEsc(label);",
@@ -205,10 +207,7 @@ func TestDashboardPieLegendTitleEscapesQuotes(t *testing.T) {
 }
 
 func TestAdminEscapesAttributesAndInlineHandlerStrings(t *testing.T) {
-	data, err := FS.ReadFile("admin.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "admin.html", false)
 	for _, want := range []string{
 		// esc() must escape both quote characters so value="..." and data-* are safe.
 		`'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'`,
@@ -251,10 +250,7 @@ func TestAdminJsqEncodingIsEntityAndQuoteSafe(t *testing.T) {
 	if err != nil {
 		t.Skip("node not available; jsq behaviour is exercised in CI where node exists")
 	}
-	data, err := FS.ReadFile("admin.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "admin.html", false)
 	src := string(data)
 	start := strings.Index(src, "function jsq(s)")
 	if start < 0 {
@@ -310,10 +306,7 @@ func TestAdminJsqEncodingIsEntityAndQuoteSafe(t *testing.T) {
 // The cost-center legend must name both the directory code and its human
 // label, with the share of spend first.
 func TestCostCenterChartShowsPercentAndDirectoryCode(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"function costCenterSliceMeta(d,total)",
 		"String(d.item.cost_center||'').trim()",
@@ -332,10 +325,7 @@ func TestCostCenterChartShowsPercentAndDirectoryCode(t *testing.T) {
 // actual-spend surface either switches to tokens or disappears. Savings stay
 // visible because they are the demo's point.
 func TestDemoModeHidesActualSpend(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"Demo mode · costs hidden",
 		".demo-private .demo-cost{display:none!important}",
@@ -426,42 +416,82 @@ func TestDashboardInlineScriptsParse(t *testing.T) {
 	if err != nil {
 		t.Skip("node not available; inline dashboard scripts are parsed in CI where node exists")
 	}
-	data, err := FS.ReadFile("dashboard.html")
+	for _, standalone := range []bool{false, true} {
+		src := string(readMode(t, "dashboard.html", standalone))
+		checked := 0
+		for {
+			start := strings.Index(src, "<script")
+			if start < 0 {
+				break
+			}
+			openEnd := strings.Index(src[start:], ">")
+			if openEnd < 0 {
+				t.Fatal("unterminated <script> tag")
+			}
+			openEnd += start
+			closeRel := strings.Index(src[openEnd+1:], "</script>")
+			if closeRel < 0 {
+				t.Fatal("unterminated inline <script> block")
+			}
+			body := src[openEnd+1 : openEnd+1+closeRel]
+			src = src[openEnd+1+closeRel+len("</script>"):]
+			if strings.TrimSpace(body) == "" {
+				continue
+			}
+			path := filepath.Join(t.TempDir(), fmt.Sprintf("inline-%d.js", checked))
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := exec.Command(nodePath, "--check", path).CombinedOutput(); err != nil {
+				t.Fatalf("standalone=%v: inline script %d does not parse: %v\n%s", standalone, checked, err, out)
+			}
+			checked++
+		}
+		if checked == 0 {
+			t.Fatalf("standalone=%v: dashboard.html has no inline scripts to parse", standalone)
+		}
+	}
+}
+
+func TestAdminInlineScriptsParse(t *testing.T) {
+	nodePath, err := exec.LookPath("node")
 	if err != nil {
-		t.Fatal(err)
+		t.Skip("node not available; inline admin scripts are parsed in CI where node exists")
 	}
-	src := string(data)
-	checked := 0
-	for {
-		start := strings.Index(src, "<script")
-		if start < 0 {
-			break
+	for _, standalone := range []bool{false, true} {
+		src := string(readMode(t, "admin.html", standalone))
+		checked := 0
+		for {
+			start := strings.Index(src, "<script")
+			if start < 0 {
+				break
+			}
+			openEnd := strings.Index(src[start:], ">")
+			if openEnd < 0 {
+				t.Fatal("unterminated <script> tag")
+			}
+			openEnd += start
+			closeRel := strings.Index(src[openEnd+1:], "</script>")
+			if closeRel < 0 {
+				t.Fatal("unterminated inline <script> block")
+			}
+			body := src[openEnd+1 : openEnd+1+closeRel]
+			src = src[openEnd+1+closeRel+len("</script>"):]
+			if strings.TrimSpace(body) == "" {
+				continue
+			}
+			path := filepath.Join(t.TempDir(), fmt.Sprintf("admin-inline-%d.js", checked))
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := exec.Command(nodePath, "--check", path).CombinedOutput(); err != nil {
+				t.Fatalf("standalone=%v: inline script %d does not parse: %v\n%s", standalone, checked, err, out)
+			}
+			checked++
 		}
-		openEnd := strings.Index(src[start:], ">")
-		if openEnd < 0 {
-			t.Fatal("unterminated <script> tag")
+		if checked == 0 {
+			t.Fatalf("standalone=%v: admin.html has no inline scripts to parse", standalone)
 		}
-		openEnd += start
-		closeRel := strings.Index(src[openEnd+1:], "</script>")
-		if closeRel < 0 {
-			t.Fatal("unterminated inline <script> block")
-		}
-		body := src[openEnd+1 : openEnd+1+closeRel]
-		src = src[openEnd+1+closeRel+len("</script>"):]
-		if strings.TrimSpace(body) == "" {
-			continue
-		}
-		path := filepath.Join(t.TempDir(), fmt.Sprintf("inline-%d.js", checked))
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if out, err := exec.Command(nodePath, "--check", path).CombinedOutput(); err != nil {
-			t.Fatalf("inline script %d does not parse: %v\n%s", checked, err, out)
-		}
-		checked++
-	}
-	if checked == 0 {
-		t.Fatal("dashboard.html has no inline scripts to parse")
 	}
 }
 

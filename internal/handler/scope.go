@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,23 +19,42 @@ func caller(r *http.Request, cfg config.Config) string {
 	return r.Header.Get(cfg.UserHeader)
 }
 
-// ApplyScope resolves the usernames a dashboard caller may query. Admins see
-// whatever they ask for; a non-admin is constrained to the logins mapped to
-// their own partner user. Returns ok=false when an error response was already
-// written.
+// ApplyScope resolves the usernames a dashboard caller may query. Admins with
+// an active partner identity may query any user; admins without one are pinned
+// to their session username. Non-admins may query their own partner logins.
+// Returns ok=false when an error response was already written.
 //
 // Package-level so every dashboard handler can reach it without constructing a
 // handler first.
 func ApplyScope(w http.ResponseWriter, r *http.Request, store *storage.Store, cfg config.Config, requestedUser string) (string, bool) {
+	callerOnly := false
 	if IsPartnerAdmin(r.Context(), cfg, store, r) {
-		return requestedUser, true
+		me := caller(r, cfg)
+		if me == "" {
+			http.Error(w, "who are you?", http.StatusUnauthorized)
+			return "", false
+		}
+		if store != nil {
+			if _, err := store.PartnerUserByMaaSUsername(r.Context(), me); err == nil {
+				return requestedUser, true
+			} else if !errors.Is(err, storage.ErrPartnerUserNotFound) {
+				slog.Warn("partner admin identity lookup failed; restricting dashboard to caller", "error", err)
+			}
+		}
+		// A configured or partner admin without an active partner identity has
+		// no organization root. Keep the self dashboard available, but do not
+		// let the admin-only endpoint turn into an unscoped usage query.
+		callerOnly = true
 	}
 	me := caller(r, cfg)
 	if me == "" {
 		http.Error(w, "who are you?", http.StatusUnauthorized)
 		return "", false
 	}
-	list := selfScope(r.Context(), store, me)
+	list := []string{me}
+	if store != nil && !callerOnly {
+		list = selfScope(r.Context(), store, me)
+	}
 	if requestedUser == "" {
 		return strings.Join(list, ","), true
 	}
@@ -51,6 +71,11 @@ func ApplyScope(w http.ResponseWriter, r *http.Request, store *storage.Store, cf
 			http.Error(w, "user outside your visibility scope", http.StatusForbidden)
 			return "", false
 		}
+	}
+	// Return the canonical caller filter on the identity-less admin path,
+	// including when the supplied filter contained only commas or whitespace.
+	if callerOnly {
+		return me, true
 	}
 	return requestedUser, true
 }
@@ -93,6 +118,21 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func decodeStandaloneJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	defer r.Body.Close()
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		http.Error(w, "expected one JSON object", http.StatusBadRequest)
 		return false
 	}
 	return true

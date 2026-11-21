@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/redhat-et/pricetag-metering/internal/config"
 	"github.com/redhat-et/pricetag-metering/internal/dashboard"
+	"github.com/redhat-et/pricetag-metering/internal/maasapi"
 	"github.com/redhat-et/pricetag-metering/internal/storage"
 )
 
@@ -78,10 +80,40 @@ func NewAuthHandler(cfg config.Config) *AuthHandler {
 		}
 		slog.Warn("SESSION_SECRET not set — using random secret (sessions won't survive restarts)")
 	}
+	// The login validator talks to the same MaaS endpoint as the API client.
+	// Standalone deployments honor the configured TLS knobs (CA bundle or
+	// skip-verify, which are mutually exclusive by config validation); cluster
+	// mode keeps default system verification, exactly as before standalone
+	// management existed. Both modes keep environment proxy support: login
+	// validation ran on http.DefaultTransport before standalone management
+	// existed, and DefaultTransport reads HTTPS_PROXY and NO_PROXY.
+	loginTLS := maasapi.TLSOptions{}
+	if cfg.StandaloneManagement() {
+		loginTLS = maasapi.TLSOptions{
+			CAFile:             cfg.MaaSAPITLS.CAFile,
+			InsecureSkipVerify: cfg.MaaSAPITLS.InsecureSkipVerify,
+		}
+	}
+	httpClient, err := maasapi.NewHTTPClient(maasapi.ClientOptions{
+		TLSOptions:      loginTLS,
+		FollowRedirects: !cfg.StandaloneManagement(),
+		UseEnvProxy:     true,
+	})
+	if err != nil {
+		slog.Error("login validator TLS configuration invalid", "error", err)
+		httpClient = &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	} else if !cfg.StandaloneManagement() {
+		httpClient.CheckRedirect = nil
+	}
 	return &AuthHandler{
 		cfg:        cfg,
 		secret:     secret,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: httpClient,
 	}
 }
 
@@ -174,7 +206,22 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.ParseForm()
+	// Login changes the browser's identity, so it needs CSRF protection even
+	// before a session exists. Keep legacy deployments unchanged.
+	if h.cfg.StandaloneManagement() && (h.cfg.ManagementPublicOrigin == "" ||
+		r.Header.Get("Origin") != h.cfg.ManagementPublicOrigin || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
+		http.Error(w, "same-origin request required", http.StatusForbidden)
+		return
+	}
+	if h.cfg.StandaloneManagement() {
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid login form", http.StatusBadRequest)
+			return
+		}
+	} else {
+		r.ParseForm()
+	}
 	apiKey := strings.TrimSpace(r.FormValue("api_key"))
 	if apiKey == "" {
 		http.Redirect(w, r, "/login?error=invalid", http.StatusFound)
@@ -262,6 +309,10 @@ func (h *AuthHandler) HandleImpersonate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if !h.confirmSessionChange(w, r, "Change dashboard view") {
+		return
+	}
+
 	target := strings.TrimSpace(r.URL.Query().Get("as"))
 	if target == "" {
 		h.setCookie(w, session.Username, session.Groups, "")
@@ -269,13 +320,59 @@ func (h *AuthHandler) HandleImpersonate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if h.cfg.StandaloneManagement() {
+		if h.orgStore == nil {
+			http.Error(w, "account directory unavailable", 503)
+			return
+		}
+		profile, err := h.orgStore.PartnerUserByMaaSUsername(r.Context(), target)
+		switch {
+		case errors.Is(err, storage.ErrPartnerUserNotFound):
+			http.Error(w, "active target account required", 403)
+			return
+		case err != nil:
+			// A directory outage is not a verdict about the target: answer
+			// 503, like the current-user check in RequireAuth, instead of
+			// presenting every target as inactive.
+			http.Error(w, "account directory unavailable", 503)
+			return
+		case !profile.Active || profile.KeyRevocationPending:
+			http.Error(w, "active target account required", 403)
+			return
+		}
+		// The lookup above matches logins case-insensitively, but the
+		// session value keys exact-match usage rows: store the directory's
+		// spelling so the impersonated view resolves the same rows the
+		// target's own session would. Mirrors the key-issuance subject
+		// canonicalization.
+		logins, err := h.orgStore.ListPartnerUsernames(r.Context(), profile.UserID)
+		if err != nil {
+			http.Error(w, "account directory unavailable", 503)
+			return
+		}
+		canonical := ""
+		for _, login := range logins {
+			if strings.EqualFold(login, target) {
+				canonical = login
+				break
+			}
+		}
+		if canonical == "" {
+			http.Error(w, "active target account required", 403)
+			return
+		}
+		target = canonical
+	}
 	slog.Info("admin viewing as user", "admin", session.Username, "as", target)
 	h.setCookie(w, session.Username, session.Groups, target)
-	// /dashboard serves the personal user page while impersonating (the
-	// operator dashboard is only shown for a real, non-swapped admin view).
+	// The upstream account page is always personal, including administrator
+	// self-view; never route an impersonated session to organization usage.
 	// ?to= lets the admin land on /manager instead, to see exactly what a
 	// manager on their team sees. Strict allowlist — never an open redirect.
 	dest := "/dashboard"
+	if h.cfg.StandaloneManagement() {
+		dest = "/account"
+	}
 	switch r.URL.Query().Get("to") {
 	case "/manager", "manager":
 		dest = "/manager"
@@ -283,7 +380,32 @@ func (h *AuthHandler) HandleImpersonate(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
+// Session-changing links remain navigable, but GET only renders a confirmation.
+// A browser POST supplies Origin and cannot be triggered by cross-site navigation.
+func (h *AuthHandler) confirmSessionChange(w http.ResponseWriter, r *http.Request, title string) bool {
+	if !h.cfg.StandaloneManagement() {
+		return true
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodGet {
+		renderSessionConfirmation(w, r, title)
+		return false
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if h.cfg.ManagementPublicOrigin == "" || r.Header.Get("Origin") != h.cfg.ManagementPublicOrigin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		http.Error(w, "same-origin request required", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 func (h *AuthHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	if !h.confirmSessionChange(w, r, "Sign out") {
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
 		Value:    "",
@@ -332,6 +454,25 @@ func (h *AuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
+		if h.cfg.StandaloneManagement() {
+			if h.orgStore == nil {
+				http.Error(w, "account directory unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			profile, err := h.orgStore.PartnerUserByMaaSUsername(r.Context(), session.Username)
+			if errors.Is(err, storage.ErrPartnerUserNotFound) {
+				http.Error(w, "account is not provisioned", http.StatusForbidden)
+				return
+			}
+			if err != nil {
+				http.Error(w, "account directory unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if !profile.Active || profile.KeyRevocationPending {
+				http.Error(w, "account is inactive", http.StatusForbidden)
+				return
+			}
+		}
 		// Never trust identity headers supplied by the client. Clear every
 		// identity header this layer sets, then rebuild it from the signed
 		// session. Without the deletes, a valid session with no groups could
@@ -356,6 +497,31 @@ func (h *AuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		// HandleImpersonate writes it for super-admins only, and the cookie
 		// is HMAC-signed, so a signed-out admin cannot forge one.
 		if session.As != "" && IsPartnerSuperAdminUsername(r.Context(), h.cfg, h.orgStore, session.Username) {
+			if h.cfg.StandaloneManagement() && r.URL.Path != "/admin/impersonate" {
+				profile, err := h.orgStore.PartnerUserByMaaSUsername(r.Context(), session.As)
+				switch {
+				case errors.Is(err, storage.ErrPartnerUserNotFound):
+					http.Error(w, "target account unavailable; return to your administrator view", 403)
+					return
+				case err != nil:
+					// An outage must not look like a verdict on the target;
+					// retrying the page is the right recovery.
+					http.Error(w, "account directory unavailable", 503)
+					return
+				case !profile.Active || profile.KeyRevocationPending:
+					http.Error(w, "target account unavailable; return to your administrator view", 403)
+					return
+				}
+				// Read-only means GET/HEAD only. OPTIONS is deliberately
+				// excluded: browser preflights never carry the session
+				// cookie, so an authenticated OPTIONS under impersonation is
+				// a non-browser client and must not reach a downstream
+				// handler with the impersonated identity.
+				if r.Method != http.MethodGet && r.Method != http.MethodHead {
+					http.Error(w, "impersonated views are read-only", 403)
+					return
+				}
+			}
 			r.Header.Set(realUserHeader, session.Username)
 			r.Header.Set(h.cfg.UserHeader, session.As)
 		}

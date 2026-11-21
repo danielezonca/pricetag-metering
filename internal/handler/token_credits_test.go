@@ -31,7 +31,7 @@ func TestTokenCreditsAPIAndEntitlement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync subject: %v", err)
 	}
-	role, err := store.CreateModelAccessRoleWithTokens(ctx, tenantID, "tester", "tokencred-role", "", []string{"claude-opus-4-8"}, false, 0, 5000000000)
+	role, err := store.CreateModelAccessRoleWithTokens(ctx, tenantID, "tester", "tokencred-role", "", []string{"claude-opus-4-8"}, false, 0, 5000000000, "")
 	if err != nil {
 		t.Fatalf("create role: %v", err)
 	}

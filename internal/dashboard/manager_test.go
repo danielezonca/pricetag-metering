@@ -9,10 +9,7 @@ import (
 // source-level guards for the behavior that has no browser test harness in
 // this repository. The backend no-key scope guard has its own unit tests.
 func TestManagerPickerReviewGuards(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
 		"const TEAM_SEARCH_LIMIT=200;",
 		"ranked.slice(0,TEAM_SEARCH_LIMIT)",
@@ -33,10 +30,10 @@ func TestManagerPickerReviewGuards(t *testing.T) {
 // The team KPI tiles must show spend for the selected window, including the
 // people the dashboard country policy hides from the table.
 func TestManagerShowsTeamSpendKPI(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Check the cluster-mode rendering: the raw unified template also carries
+	// standalone-only code (org/dashboard self view), which this test must not
+	// mistake for cluster behavior.
+	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
 		`id="kpiSpendTile"`,
 		`id="kSpendL">Team spend`,
@@ -79,6 +76,23 @@ func TestManagerShowsTeamSpendKPI(t *testing.T) {
 	}
 }
 
+func TestManagerSelfChartsAndFallbackUsePersonalUsage(t *testing.T) {
+	data := readMode(t, "manager.html", true)
+	for _, want := range []string{
+		`j('/api/v1/me/usage/summary?range='+requestRange`,
+		`j('/api/v1/me/usage/models?range='+requestRange`,
+		`chartJSON('/api/v1/me/usage/summary?range='+requestRange`,
+		`chartsCache={overview:ov,models:mo,users:us,timeline:[]};`,
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("standalone self dashboard no longer uses server-scoped rows: missing %q", want)
+		}
+	}
+	if bytes.Contains(data, []byte("/api/v1/dashboard/")) {
+		t.Error("standalone self fallback must not require admin-only dashboard endpoints")
+	}
+}
+
 func TestManagerDemoPrivacyKeepsHeaderLayoutStable(t *testing.T) {
 	data, err := FS.ReadFile("manager.html")
 	if err != nil {
@@ -97,10 +111,7 @@ func TestManagerDemoPrivacyKeepsHeaderLayoutStable(t *testing.T) {
 }
 
 func TestManagerDemoModeHidesActualSpend(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
 		"Demo mode · costs hidden",
 		".demo-private .demo-cost{display:none!important}",
@@ -117,10 +128,7 @@ func TestManagerDemoModeHidesActualSpend(t *testing.T) {
 }
 
 func TestManagerTimelineRanksByUsage(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "manager.html", false)
 	for _, want := range []string{
 		"const ranked=[...totals.entries()].filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);",
 		"const top=ranked.slice(0,7).map(([n])=>n);",

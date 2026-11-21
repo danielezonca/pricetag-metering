@@ -48,18 +48,32 @@ func TestIsAdmin_SecurityDefaults(t *testing.T) {
 }
 
 // ApplyScope is the single gate every dashboard query passes through.
-// These cases run without a database on purpose: the branches they cover
-// (admin passthrough, anonymous rejection) must not touch the store at all.
+// These cases run without a database on purpose: a configured admin without
+// a partner identity must be limited to self, and anonymous users are rejected.
 func TestApplyScope_DBFreeBranches(t *testing.T) {
 	cfg := testCfg()
 
-	// Admin: filter passes through byte-for-byte — existing behaviour.
+	// A break-glass admin without a partner directory identity can use the
+	// dashboard for their own row, but cannot request another user.
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set(cfg.UserHeader, "boss")
 	w := httptest.NewRecorder()
-	got, ok := ApplyScope(w, r, nil, cfg, "alice,bob")
-	if !ok || got != "alice,bob" {
-		t.Errorf("admin passthrough broken: got %q ok=%v", got, ok)
+	got, ok := ApplyScope(w, r, nil, cfg, "")
+	if !ok || got != "boss" {
+		t.Errorf("admin without partner identity scope = %q ok=%v, want self", got, ok)
+	}
+	for _, filter := range []string{"boss", " boss , ", " , "} {
+		w := httptest.NewRecorder()
+		got, ok := ApplyScope(w, r, nil, cfg, filter)
+		if !ok || got != "boss" {
+			t.Errorf("identity-less admin filter %q resolved to %q ok=%v, want caller only", filter, got, ok)
+		}
+	}
+	r = httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set(cfg.UserHeader, "boss")
+	w = httptest.NewRecorder()
+	if _, ok := ApplyScope(w, r, nil, cfg, "alice,bob"); ok || w.Code != http.StatusForbidden {
+		t.Errorf("admin without partner identity must not request other users: ok=%v status=%d", ok, w.Code)
 	}
 
 	// Anonymous non-admin: rejected, and a nil store proves nothing was

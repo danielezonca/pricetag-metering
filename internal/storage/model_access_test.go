@@ -1007,3 +1007,28 @@ func TestAddQuotaCreditIdempotentByRequestID(t *testing.T) {
 		t.Fatal("reusing a request_id for a different amount must fail")
 	}
 }
+
+func TestModelAccessRoleIdempotentRequestID(t *testing.T) {
+	s, ctx := openTestStore(t)
+	tenant := createTestTenant(t, s, ctx, "idempotent-role", false)
+
+	created, err := s.CreateModelAccessRoleWithTokens(ctx, tenant, "tester", "req-role", "", nil, false, 0, 0, "create-req-123")
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	replayed, err := s.GetModelAccessRoleByRequestID(ctx, tenant, "create-req-123")
+	if err != nil {
+		t.Fatalf("lookup by request id: %v", err)
+	}
+	if replayed.RoleID != created.RoleID || replayed.Name != "req-role" || replayed.SubjectCount != created.SubjectCount || !slices.Equal(replayed.Models, created.Models) {
+		t.Fatalf("replayed role = %#v; want %#v", replayed, created)
+	}
+	if replayed.Models == nil {
+		t.Fatal("replayed role with no models must return an empty slice")
+	}
+
+	if _, err := s.GetModelAccessRoleByRequestID(ctx, tenant, "no-such-request"); !errors.Is(err, ErrModelAccessRoleNotFound) {
+		t.Fatalf("unknown request id = %v; want ErrModelAccessRoleNotFound", err)
+	}
+}

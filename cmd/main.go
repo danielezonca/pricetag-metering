@@ -352,7 +352,24 @@ func main() {
 		if maasTenant == "" {
 			maasTenant = "models-as-a-service"
 		}
-		maasClient := maasapi.NewClient(maasAPIURL, maasTenant)
+		maasClient, err := maasapi.NewClientWithOptions(maasAPIURL, maasTenant, maasapi.ClientOptions{
+			TLSOptions: maasapi.TLSOptions{
+				CAFile:             cfg.MaaSAPITLS.CAFile,
+				InsecureSkipVerify: cfg.MaaSAPITLS.InsecureSkipVerify,
+			},
+			FollowRedirects: cfg.MaaSAPITLS.FollowRedirects,
+			StrictKeyList:   cfg.MaaSAPITLS.StrictKeyList,
+			// Key minting and revocation connect directly in cluster mode,
+			// exactly as before standalone management existed: maas-api is an
+			// in-cluster service there, and an environment proxy must not sit
+			// between them. Standalone deployments may reach MaaS only
+			// through a proxy, like the login validator, so they opt in.
+			UseEnvProxy: cfg.StandaloneManagement(),
+		})
+		if err != nil {
+			slog.Error("maas-api TLS configuration invalid", "error", err)
+			os.Exit(1)
+		}
 
 		adminHandler := handler.NewAdminHandler(k8sClient, maasClient, cfg)
 		adminHandler.SetStore(store)
@@ -377,6 +394,7 @@ func main() {
 		keysHandler := handler.NewKeysHandler(k8sClient, cfg, store)
 		usageReportHandler := handler.NewUsageReportHandler(store)
 		partnerUsersHandler := handler.NewPartnerUsersHandler(store, maasClient, cfg.PartnerUserKeyGroup)
+		partnerUsersHandler.SetConfig(cfg)
 		partnerUsersHandler.SetUserHeader(cfg.UserHeader)
 		partnerUserUsageHandler := handler.NewPartnerUserUsageHandler(store)
 		modelCatalogHandler := handler.NewModelCatalogHandler(k8sClient)
@@ -393,6 +411,21 @@ func main() {
 		dashboardGate := handler.NewDashboardCountryGate(store, cfg)
 		auth := func(next http.HandlerFunc) http.HandlerFunc {
 			return authHandler.RequireAuth(dashboardGate.Wrap(next))
+		}
+		if cfg.StandaloneManagement() {
+			// The management endpoints and the login flow apply their own
+			// same-origin (RequireBrowserOrigin) checks; the general session
+			// wrapper must stay unchanged so ordinary dashboard routes keep
+			// their legacy behavior. The management routes take the same
+			// session wrapper as every other dashboard route; their bearer
+			// path never reaches it.
+			mux.HandleFunc("/api/v1/management/key-revocations", handler.RequireManagement(cfg, store, auth, handler.NewManagementKeyRevocationsHandler(store, cfg, maasClient)))
+			mux.HandleFunc("/api/v1/management/keys", handler.RequireManagement(cfg, store, auth, handler.NewManagementKeysHandler(store, cfg, maasClient)))
+			mux.HandleFunc("/api/v1/management/", handler.RequireManagement(cfg, store, auth, handler.NewManagementHandler(store, cfg)))
+			// Existing standalone bookmarks now use the upstream account page.
+			mux.HandleFunc("/management", auth(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/account?tab=keys", http.StatusFound)
+			}))
 		}
 
 		// Machine-to-machine APIs — no session required

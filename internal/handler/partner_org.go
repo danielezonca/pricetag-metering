@@ -55,6 +55,14 @@ func (h *PartnerOrgHandler) ServeManager(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "manager page not found", http.StatusInternalServerError)
 		return
 	}
+	data, err = dashboard.ForMode(data, h.cfg.StandaloneManagement())
+	if err != nil {
+		http.Error(w, "manager page not available", http.StatusInternalServerError)
+		return
+	}
+	if h.cfg.StandaloneManagement() {
+		data = dashboard.WithSessionDialog(data)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(data)
@@ -203,6 +211,38 @@ func (h *PartnerOrgHandler) HandleOrgUsage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	since, until := parseTimeWindow(r)
+	// Standalone mode serves the managed directory rollup as a flat array:
+	// the standalone manager page and the demo automation depend on that
+	// shape. Cluster mode ships the rows-plus-totals envelope below.
+	if h.cfg.StandaloneManagement() {
+		managedRows, err := h.store.GetManagedPartnerOrgUsage(r.Context(), root, since, until)
+		if err != nil {
+			slog.Error("org usage query failed", "error", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		superAdmin := IsPartnerSuperAdmin(r.Context(), h.cfg, h.store, r)
+		// Dashboard country policy, standalone shape: managers do not see
+		// people from blocked regions, exactly like the cluster branch
+		// below. Super-admins see everyone: they own the policy and need
+		// the directory. The flat-array contract has no totals envelope,
+		// so unlike the cluster response the caller's client-side totals
+		// exclude hidden people.
+		visible := managedRows
+		if !superAdmin && managedRows != nil {
+			visible = make([]storage.ManagedOrgUsageRow, 0, len(managedRows))
+			for _, row := range managedRows {
+				if !row.Blocked {
+					visible = append(visible, row)
+				}
+			}
+		}
+		if visible == nil {
+			visible = []storage.ManagedOrgUsageRow{}
+		}
+		writeJSON(w, visible)
+		return
+	}
 	rows, err := h.store.GetPartnerOrgUsage(r.Context(), root, since, until)
 	if err != nil {
 		slog.Error("org usage query failed", "error", err)

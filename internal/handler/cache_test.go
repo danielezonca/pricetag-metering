@@ -381,13 +381,19 @@ func TestResolveScopeHonoursPreResolution(t *testing.T) {
 		t.Fatalf("got (%q,%v), want (pre@resolved,true) without touching the store", got, ok)
 	}
 
-	// Cache OFF path: admin branch runs ApplyScope DB-free.
+	// Cache OFF path: an admin without a directory identity is limited to self.
 	cfg := config.Config{UserHeader: "X-Forwarded-User", AdminUsers: []string{"boss"}}
 	req := httptest.NewRequest("GET", "/api/v1/dashboard/overview", nil)
 	req.Header.Set("X-Forwarded-User", "boss")
-	got, ok = resolveScope(httptest.NewRecorder(), req, nil, cfg, "someone")
-	if !ok || got != "someone" {
-		t.Fatalf("admin passthrough = (%q,%v), want (someone,true)", got, ok)
+	got, ok = resolveScope(httptest.NewRecorder(), req, nil, cfg, "")
+	if !ok || got != "boss" {
+		t.Fatalf("admin without partner identity scope = (%q,%v), want (boss,true)", got, ok)
+	}
+	req = httptest.NewRequest("GET", "/api/v1/dashboard/overview", nil)
+	req.Header.Set("X-Forwarded-User", "boss")
+	w := httptest.NewRecorder()
+	if _, ok := resolveScope(w, req, nil, cfg, "someone"); ok || w.Code != http.StatusForbidden {
+		t.Fatalf("admin without partner identity must not request another user: ok=%v status=%d", ok, w.Code)
 	}
 }
 

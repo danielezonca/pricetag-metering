@@ -22,7 +22,7 @@ func TestRoleTokenBudgetAndCredits(t *testing.T) {
 	subjectID, _ := s.SyncPartnerUserSubject(ctx, tenantID, userID)
 
 	// role with 15B token limit
-	roleA, err := s.CreateModelAccessRoleWithTokens(ctx, tenantID, "tester", "RoleA", "test", []string{"claude-opus-4-8"}, false, 0, 15_000_000_000)
+	roleA, err := s.CreateModelAccessRoleWithTokens(ctx, tenantID, "tester", "RoleA", "test", []string{"claude-opus-4-8"}, false, 0, 15_000_000_000, "")
 	if err != nil {
 		t.Fatalf("create role A: %v", err)
 	}

@@ -12,10 +12,7 @@ func TestPiePalettesHaveUniqueColors(t *testing.T) {
 	hexRE := regexp.MustCompile(`'#[0-9a-fA-F]{6}'`)
 
 	for _, file := range files {
-		data, err := FS.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := readMode(t, file, false)
 		m := paletteRE.FindSubmatch(data)
 		if m == nil {
 			t.Fatalf("%s: pie palette not found", file)
@@ -36,10 +33,7 @@ func TestPiePalettesHaveUniqueColors(t *testing.T) {
 }
 
 func TestManagerPieDoesNotCollapseHostedModels(t *testing.T) {
-	data, err := FS.ReadFile("manager.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "manager.html", false)
 	// Hosted models used to share one green slice; every model slice must
 	// come from the categorical palette instead.
 	if strings.Contains(string(data), "d.hosted?'#3fb950'") {
@@ -48,10 +42,7 @@ func TestManagerPieDoesNotCollapseHostedModels(t *testing.T) {
 }
 
 func TestToolPieColorsAreUnique(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	lineRE := regexp.MustCompile(`(?m)^\s*return \{'Claude Code'.*;$`)
 	line := lineRE.Find(data)
 	if line == nil {

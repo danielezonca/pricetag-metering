@@ -6,10 +6,7 @@ import (
 )
 
 func TestGeoMapUsesRaisedDeepSpaceStyle(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"var GEO_LAND_COLOR='#394b59';",
 		"var GEO_GLOW_STOPS=['#394b59','#8d5b3d','#d47b3e','#ffb36c','#fff2d8'];",
@@ -42,10 +39,7 @@ func TestGeoMapUsesRaisedDeepSpaceStyle(t *testing.T) {
 }
 
 func TestGeoMapUsesCountryFillHeat(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"class','geo-country-heat'",
 
@@ -77,10 +71,7 @@ func TestGeoMapUsesCountryFillHeat(t *testing.T) {
 }
 
 func TestGeoMapUsesCountryTotalWhenUSStateBreakdownIsMissing(t *testing.T) {
-	data, err := FS.ReadFile("dashboard.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readMode(t, "dashboard.html", false)
 	for _, want := range []string{
 		"geoHasUSStateData=Array.from(byState.keys()).some(function(k){return k.indexOf('US|')===0&&(byState.get(k)||0)>0;});",
 		"geoHasUSStateData?(geoValueByState.get('US|'+code)||0):(geoValueByCountry.get('US')||0)",

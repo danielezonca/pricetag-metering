@@ -65,6 +65,19 @@ func TestPartnerManagerScope(t *testing.T) {
 	} else if !contains(scope, "alice@example.com") {
 		t.Fatalf("scope unexpectedly lost descendants: %v", scope)
 	}
+
+	// A role-only edit resends the persisted manager through the update
+	// contract. It must preserve an inactive manager, while a new assignment
+	// to that same inactive user remains rejected.
+	if _, err := s.db.ExecContext(ctx, `UPDATE partner_users SET active=FALSE WHERE user_id=$1`, mgr); err != nil {
+		t.Fatalf("deactivate manager: %v", err)
+	}
+	if _, err := s.UpdatePartnerUserAccess(ctx, "test", alice, PartnerRoleAdmin, strPtr(mgr)); err != nil {
+		t.Fatalf("role update should preserve the existing inactive manager: %v", err)
+	}
+	if _, err := s.UpdatePartnerUserAccess(ctx, "test", boss, PartnerRoleAdmin, strPtr(mgr)); !errors.Is(err, ErrPartnerUserInactive) {
+		t.Fatalf("new assignment to inactive manager should be rejected, got %v", err)
+	}
 }
 
 func contains(s []string, v string) bool {

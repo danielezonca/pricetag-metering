@@ -1,6 +1,9 @@
 package storage
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // --- Post-cap allowance (issue #22) ---
 
@@ -87,5 +90,50 @@ func TestQuotaDecisionUnlinkedIdentityUsesGlobalDefault(t *testing.T) {
 	}
 	if d.BudgetSource != "default" || d.LimitUSD != 123 {
 		t.Fatalf("decision = %#v", d)
+	}
+}
+
+// NaN and infinities pass a bare <= 0 guard, and PostgreSQL 14+ accepts them
+// as numeric values — a stored NaN override would make every limit
+// comparison false and bypass the quota. The store must reject them itself,
+// not rely on every caller remembering the API-boundary check.
+func TestUpsertQuotaOverrideRejectsNonFiniteUSD(t *testing.T) {
+	s, ctx := openTestStore(t)
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), 0, -5} {
+		if err := s.UpsertQuotaOverride(ctx, "test-admin", "user", "alice", value); err == nil {
+			t.Fatalf("monthly_usd %v accepted", value)
+		}
+	}
+}
+
+func TestQuotaDecisionOverrideMatchesMixedCaseUsername(t *testing.T) {
+	s, ctx := openTestStore(t)
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO quota_policy (id, default_monthly_usd, enforced, allowed_over_limit_models)
+		VALUES (true, 123, true, '{}')
+		ON CONFLICT (id) DO UPDATE SET
+			default_monthly_usd=123, enforced=true, allowed_over_limit_models='{}'`); err != nil {
+		t.Fatal(err)
+	}
+	// The management handler stores user-scope override principals
+	// lowercased; the enforcement join must match a mixed-case login
+	// against that stored spelling.
+	if err := s.UpsertQuotaOverride(ctx, "test", "user", "mixedcase@example.com", 45); err != nil {
+		t.Fatal(err)
+	}
+	d, _, err := s.QuotaDecisionCached(ctx, "MixedCase@Example.com", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.BudgetSource != "user_override" || d.BaseUSD != 45 {
+		t.Fatalf("mixed-case username did not pick up its lowercased override: %#v", d)
+	}
+	// Control: the lowercase spelling keeps matching identically.
+	d, _, err = s.QuotaDecisionCached(ctx, "mixedcase@example.com", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.BudgetSource != "user_override" || d.BaseUSD != 45 {
+		t.Fatalf("lowercase username stopped matching its override: %#v", d)
 	}
 }

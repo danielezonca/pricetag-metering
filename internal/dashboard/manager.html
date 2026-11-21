@@ -4,7 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EnMaaS · My team</title>
+<!--MODE:cluster-->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+//MODE:end
+//MODE:standalone
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt" crossorigin="anonymous"></script>
+//MODE:end
 <style>
 :root{
   color-scheme:dark;
@@ -197,7 +202,12 @@ td.num{text-align:right}
     <a href="/admin" id="tab-admin" style="display:none">Admin</a>
   </nav>
   <div class="ab-right">
+<!--MODE:cluster-->
     <button class="ab-out" style="border-color:var(--accent);color:var(--accent);display:none" id="my-view-btn" title="See the dashboard as a regular user would">My view as user</button>
+<!--MODE:end-->
+<!--MODE:standalone-->
+    <a href="#" class="ab-out" style="border-color:var(--accent);color:var(--accent);display:none" id="my-view-btn" title="See the dashboard as a regular user would">My view as user</a>
+<!--MODE:end-->
     <button class="ab-out" style="color:var(--text)" onclick="openPricing()">Pricing</button>
     <span class="demo-badge" id="demoBadge">Demo mode · costs hidden</span>
     <span class="ab-user" id="abUser"></span>
@@ -255,7 +265,12 @@ td.num{text-align:right}
   <div id="selfNote"></div>
   <div class="kpis">
     <div class="kpi" id="kpiSpendTile"><div class="l" id="kSpendL">Team spend</div><div class="v" id="kSpend">–</div><div class="s" id="kSpendS"></div></div>
+<!--MODE:cluster-->
     <div class="kpi"><div class="l">Saved · Hosted Models</div><div class="v saved-pos" id="kSaved">–</div><div class="s">vs <select class="refsel" id="refSel" onchange="refChanged()"></select><span id="kSavedNote"></span></div></div>
+<!--MODE:end-->
+<!--MODE:standalone-->
+    <div class="kpi"><div class="l">Saved · Hosted Models</div><div class="v saved-pos" id="kSaved">–</div><div class="s">vs <select class="refsel" id="refSel" onchange="savingsRef=this.value;(selfCharts?loadSelfCharts():loadCharts());"></select><span id="kSavedNote"></span></div></div>
+<!--MODE:end-->
     <div class="kpi" id="kpiMembers"><div class="l">Members</div><div class="v" id="kPeople">–</div><div class="s" id="kPeopleS"></div></div>
   </div>
   <!-- Pending-decisions banner: same role as the user's "request pending"
@@ -270,6 +285,9 @@ td.num{text-align:right}
     <h2>Approval requests <span id="apprCount" class="dim" style="text-transform:none;letter-spacing:0;font-weight:400"></span> <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">— over-limit budget asks from your team</span></h2>
     <div id="apprBody"></div>
   </div>
+<!--MODE:standalone-->
+  <p id="chartsError" class="err" role="status" hidden></p>
+<!--MODE:end-->
   <div class="charts" id="chartsRow">
     <div class="panel"><h2>Token Usage · Hosted vs Vendor</h2><canvas id="hvChart" height="170"></canvas></div>
     <div class="panel">
@@ -296,11 +314,20 @@ td.num{text-align:right}
     <div style="overflow-x:auto">
     <table>
       <thead><tr>
+<!--MODE:cluster-->
         <th data-s="FullName">Person</th>
         <th class="num demo-cost" data-s="CostUSD">Spend</th>
         <th class="num" data-s="TotalTokens">Tokens</th>
         <th class="num" data-s="Requests">Requests</th>
         <th data-s="LastUsed">Last used</th>
+<!--MODE:end-->
+<!--MODE:standalone-->
+        <th data-s="full_name">Person</th>
+        <th class="num demo-cost" data-s="cost_usd">Spend</th>
+        <th class="num" data-s="total_tokens">Tokens</th>
+        <th class="num" data-s="requests">Requests</th>
+        <th data-s="last_used">Last used</th>
+<!--MODE:end-->
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -411,6 +438,7 @@ td.num{text-align:right}
 // team KPI tiles, never per-request rows, so sub-cent rounding is irrelevant.
 const fmt$=v=>'$'+Number(v||0).toLocaleString(undefined,{maximumFractionDigits:2});
 const fmtTok=v=>{v=Number(v||0);if(v>=1e12)return (v/1e12).toFixed(2)+'T';if(v>=1e9)return (v/1e9).toFixed(2)+'B';if(v>=1e6)return (v/1e6).toFixed(2)+'M';if(v>=1e3)return (v/1e3).toFixed(1)+'K';return ''+v};
+//MODE:cluster
 // Shared by the self view: throw on a non-2xx response (so the caller can
 // surface an error row) and parse the body once. Manager charts keep their
 // own inline fetch because they tolerate a failed refresh.
@@ -420,13 +448,24 @@ async function chartJSON(url){
   return r.json();
 }
 let range='mtd', rows=[], tlChart=null, sortKey='CostUSD', sortDir=-1, me={}, drillSlug='';
+//MODE:end
+//MODE:standalone
+let range='mtd', rows=[], tlChart=null, sortKey='cost_usd', sortDir=-1, me={}, drillSlug='';
+let usageGeneration=0, detailGeneration=0;
+let selfScope=false, selfCharts=false;
+//MODE:end
 let tlMetric='tokens'; // 'tokens' | 'cost' — the Daily model usage toggle
 
 document.getElementById('ranges').addEventListener('click',e=>{
   const b=e.target.closest('button'); if(!b)return;
   range=b.dataset.r;
   document.querySelectorAll('#ranges button').forEach(x=>x.classList.toggle('on',x===b));
+//MODE:cluster
   load();
+//MODE:end
+//MODE:standalone
+  selfScope?loadSelf():load();
+//MODE:end
 });
 document.querySelector('thead').addEventListener('click',e=>{
   const th=e.target.closest('th'); if(!th||!th.dataset.s)return;
@@ -706,17 +745,33 @@ function setupTeamCombobox(){
 }
 
 async function load(){
+//MODE:standalone
+  const generation=++usageGeneration;
+  const requestRange=range, requestDrillSlug=drillSlug, requestScopeRoot=scopeRootSlug, requestSelfScope=selfScope;
+//MODE:end
   try{
+//MODE:cluster
     const qs='range='+range+(drillSlug?'&root='+encodeURIComponent(drillSlug):'');
     // One request: rows for the table plus the inclusive subtree totals,
     // computed server-side in the same query. Older builds return a bare
     // array — fall back to rows-only so a cached page still works.
     const bundle=await fetch('/api/v1/org/usage?'+qs).then(async r=>{const j=await r.json();if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;});
+//MODE:end
+//MODE:standalone
+    const url='/api/v1/org/usage?range='+requestRange+(requestDrillSlug?'&root='+encodeURIComponent(requestDrillSlug):'');
+    const bundle=await (await fetch(url)).json();
+    if(usageGeneration!==generation||range!==requestRange||drillSlug!==requestDrillSlug||scopeRootSlug!==requestScopeRoot||selfScope!==requestSelfScope)return;
+//MODE:end
     const data=Array.isArray(bundle)?bundle:bundle.rows;
     const totals=Array.isArray(bundle)?null:(bundle.totals||null);
     if(!Array.isArray(data))throw new Error(bundle.error||'usage failed');
     rows=data;
+//MODE:cluster
     if(!drillSlug){rows0=data;drillRoot=scopeRootSlug;buildFilter();}
+//MODE:end
+//MODE:standalone
+    if(!requestDrillSlug){rows0=data;drillRoot=requestScopeRoot;buildFilter();}
+//MODE:end
     renderRows();
     renderPolicyNote(totals);
     const active=rows.filter(r=>r.requests>0).length;
@@ -725,7 +780,12 @@ async function load(){
     let peopleSub=active+' with usage this window';
     if(totals&&totals.blocked_people>0)peopleSub+=' · '+totals.blocked_people+' hidden by policy';
     document.getElementById('kPeopleS').textContent=peopleSub;
+//MODE:cluster
     const selected=drillSlug?rows0.find(r=>r.slug===drillSlug):null;
+//MODE:end
+//MODE:standalone
+    const selected=requestDrillSlug?rows0.find(r=>r.slug===requestDrillSlug):null;
+//MODE:end
     const personView=!!(selected&&!selected.is_manager);
     document.getElementById('membersTitle').textContent=personView?'Person usage':(adminScope&&!drillSlug?'Organisation members':'Team members');
     // The boot subtitle counts directory identities; once the roster is in,
@@ -743,8 +803,17 @@ async function load(){
     document.getElementById('kSpend').textContent=fmt$(spendCost);
     document.getElementById('kSpendS').textContent=fmtTok(spendTokens)+' tokens · '+spendReq+' requests this window';
     document.getElementById('kSpendL').textContent=personView?'Person spend':(adminScope&&!drillSlug?'Org spend':'Team spend');
+//MODE:standalone
+    loadCharts(requestDrillSlug,requestRange);
+  }catch(e){
+    if(usageGeneration!==generation||range!==requestRange||drillSlug!==requestDrillSlug||scopeRootSlug!==requestScopeRoot||selfScope!==requestSelfScope)return;
+    document.getElementById('rows').innerHTML='<tr><td colspan="5" class="err">'+esc(e.message)+'</td></tr>';
+  }
+//MODE:end
+//MODE:cluster
     loadCharts();
   }catch(e){document.getElementById('rows').innerHTML='<tr><td colspan="5" class="err">'+esc(e.message)+'</td></tr>';}
+//MODE:end
 }
 
 // Dashboard country policy: blocked people are not listed, but their usage is
@@ -776,7 +845,12 @@ let selfMode=false;    // no direct reports: the /me/* self-pinned endpoints bac
 // for a manager with a busy team.
 const PIE_COLORS=['#4da0f8','#eba830','#a88cf8','#38d4c2','#e8554e','#f778ba','#b8d94a','#6e7bf2','#b07a48','#ff8c69','#79c0ff','#d2a8ff','#56d4dd','#e3b341','#8090a8'];
 var savingsRef='claude-opus-4-8', modelMetric='tokens', userPieMetric='cost';
+//MODE:cluster
 var chartsCache=null, hvChart=null, modelChart=null, userChart=null;
+//MODE:end
+//MODE:standalone
+var chartsCache=null, hvChart=null, modelChart=null, userChart=null, chartsGeneration=0;
+//MODE:end
 // Mirror of the Usage page's reference-model picklist and rate card, so the
 // "priced vs" choice means the same thing on both pages.
 var SAVINGS_REF_MODELS=['claude-opus-5','claude-fable-5','claude-opus-4-8','claude-sonnet-4-6','claude-haiku-4-5','gpt-5.5','gpt-5.4','gpt-4o'];
@@ -793,19 +867,50 @@ function isHostedModel(m){return m.hosted===true||HOSTED_PROVIDERS.indexOf(m.pro
 function pieVal(d,m){return m==='cost'?d.cost_usd||0:m==='requests'?d.requests||0:d.total_tokens||0;}
 function pieFmt(v,m){return m==='cost'?fmt$(v):fmtTok(v);}
 
+//MODE:standalone
+function chartFailure(error){
+ const message=document.getElementById('chartsError');message.hidden=false;
+ message.textContent='Charts could not be loaded. '+(error instanceof Error?error.message:String(error))+' Change the range to retry.';
+}
+async function chartJSON(url){const response=await fetch(url,{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);return response.json();}
+//MODE:end
 async function loadCharts(){
+//MODE:standalone
+  const generation=++chartsGeneration;
+  const chartRoot=arguments.length>0?arguments[0]:drillSlug;
+  const chartRange=arguments.length>1?arguments[1]:range;
+  const chartRef=savingsRef;
+//MODE:end
   try{
+//MODE:cluster
     let url='/api/v1/org/charts?range='+range+'&ref='+encodeURIComponent(savingsRef);
     if(drillSlug)url+='&root='+encodeURIComponent(drillSlug);
     const d=await (await fetch(url)).json();
+//MODE:end
+//MODE:standalone
+    let url='/api/v1/org/charts?range='+chartRange+'&ref='+encodeURIComponent(savingsRef);
+    if(chartRoot)url+='&root='+encodeURIComponent(chartRoot);
+    const d=await chartJSON(url);
+    if(chartsGeneration!==generation||range!==chartRange||drillSlug!==chartRoot||savingsRef!==chartRef)return;
+    document.getElementById('chartsError').hidden=true;
+//MODE:end
     if(!d||!d.overview)throw new Error(d.error||'charts failed');
     chartsCache=d;
+//MODE:standalone
+    document.getElementById('tlPanel').style.display='';
+//MODE:end
     renderTimeline(d.timeline||[]);
     renderSavedKPI(d.overview);
     renderPies();
+//MODE:cluster
   }catch(e){/* the table reports real failures; charts just stay as-is */}
+//MODE:end
+//MODE:standalone
+  }catch(e){if(chartsGeneration===generation&&range===chartRange&&drillSlug===chartRoot&&savingsRef===chartRef)chartFailure(e);}
+//MODE:end
 }
 
+//MODE:cluster
 // Self view charts. /api/v1/dashboard/* is admin-only and unscoped for
 // admins, so the self view must use the self-pinned /api/v1/me/usage
 // endpoints instead: summary for the overview/Saved card, models for the
@@ -833,6 +938,32 @@ async function loadSelfCharts(overview){
     renderPies();
   }catch(e){/* charts stay as-is; the table reports real failures */}
 }
+//MODE:end
+//MODE:standalone
+// The fallback has no partner identity or admin rights. Use the authenticated,
+// self-pinned endpoints; the dashboard endpoints require an administrator.
+async function loadSelfCharts(){
+  const generation=++chartsGeneration, requestRange=range, requestRef=savingsRef;
+  try{
+    const j=chartJSON;
+    const [summary,mo]=await Promise.all([
+      j('/api/v1/me/usage/summary?range='+requestRange+'&ref='+encodeURIComponent(requestRef)),
+      j('/api/v1/me/usage/models?range='+requestRange)
+    ]);
+    if(chartsGeneration!==generation||range!==requestRange||savingsRef!==requestRef)return;
+    if(!summary||!summary.overview||!Array.isArray(mo))throw new Error('usage failed');
+    const ov=summary.overview;
+    const us=[{username:me.user||'',display_name:me.display_name||'',
+      total_tokens:ov.total_tokens||0,requests:ov.total_requests||0,cost_usd:ov.total_cost_usd||0}];
+    document.getElementById('chartsError').hidden=true;
+    chartsCache={overview:ov,models:mo,users:us,timeline:[]};
+    // No self-scoped timeline endpoint is available.
+    document.getElementById('tlPanel').style.display='none';
+    renderSavedKPI(ov);
+    renderPies();
+  }catch(e){if(chartsGeneration===generation)chartFailure(e);}
+}
+//MODE:end
 
 function personName(username){
   const r=rows.find(x=>x.username===username);
@@ -1116,7 +1247,24 @@ document.getElementById('umToggle').addEventListener('click',e=>{
 });
 
 async function boot(){
+//MODE:cluster
   try{ me=await (await fetch('/api/v1/whoami')).json(); }catch(e){}
+//MODE:end
+//MODE:standalone
+  try{
+    const session=await fetch('/api/v1/whoami');
+    if(!session.ok)throw new Error('HTTP '+session.status);
+    me=await session.json();
+    if(!me||typeof me!=='object')throw new Error('invalid session response');
+  }catch(e){
+    // #pm-body lives inside the pricing overlay, which stays hidden until
+    // a control opens it: write the failure where it is visible — the
+    // usage table the page centers on — or the dashboard boots to an
+    // unexplained blank.
+    document.getElementById('rows').innerHTML='<tr><td colspan="5" class="err">Could not load your session. Reload to try again.</td></tr>';
+    return;
+  }
+//MODE:end
   // Header identity + role-gated tabs (same convention as every page).
   const ab=document.getElementById('abUser');
   ab.innerHTML='<span class="demo-pii">'+esc(me.display_name||me.user||'')+'</span>';
@@ -1128,6 +1276,9 @@ async function boot(){
   }
   if(me.isSuperAdmin){
     ['tab-routing','tab-admin'].forEach(id=>document.getElementById(id).style.display='');
+//MODE:standalone
+    if(me.managementEnabled)document.getElementById('tab-routing').style.display='none';
+//MODE:end
     const mvb=document.getElementById('my-view-btn');
     mvb.href='/admin/impersonate?as='+encodeURIComponent(me.user);
     mvb.style.display='';
@@ -1143,9 +1294,29 @@ async function boot(){
     // No ?as= means "clear" server-side.
     document.getElementById('bannerClear').href='/admin/impersonate';
   }
+//MODE:cluster
   const sc=await (await fetch('/api/v1/org/scope')).json();
+//MODE:end
+//MODE:standalone
+  let sc;
+  try{
+    const scopeResp=await fetch('/api/v1/org/scope');
+    if(!scopeResp.ok)throw new Error('HTTP '+scopeResp.status);
+    sc=await scopeResp.json();
+  }catch(e){
+    // Same visibility rule as the session failure: the table is the
+    // page's visible surface, the hidden pricing modal is not.
+    document.getElementById('rows').innerHTML='<tr><td colspan="5" class="err">Could not load your organisation. Reload to try again.</td></tr>';
+    return;
+  }
+//MODE:end
   if(sc.scope==='self'){
+//MODE:cluster
     selfMode=true;
+//MODE:end
+//MODE:standalone
+    selfScope=true;
+//MODE:end
     document.getElementById('scopeTitle').textContent='My usage';
     document.getElementById('scopeSub').textContent='You are not listed as a manager in the directory — showing your own usage.';
     document.getElementById('selfNote').innerHTML=
@@ -1253,7 +1424,16 @@ function rejectReq(id){
   decideReq(id,'reject',{comment:c.trim()},'Rejected.');
 }
 
+//MODE:standalone
+function renderSelfSpend(){
+  const totals=rows.reduce((sum,row)=>({cost:sum.cost+Number(row.cost_usd||0),tokens:sum.tokens+Number(row.total_tokens||0),requests:sum.requests+Number(row.requests||0)}),{cost:0,tokens:0,requests:0});
+  document.getElementById('kSpend').textContent=fmt$(totals.cost);
+  document.getElementById('kSpendS').textContent=fmtTok(totals.tokens)+' tokens · '+totals.requests+' requests this window';
+  document.getElementById('kSpendL').textContent='My spend';
+}
+//MODE:end
 async function loadSelf(){
+//MODE:cluster
   // Self-pinned: the admin-only /dashboard/users listing returns the whole
   // organisation for admins (and 403 for plain users), so "My spend" and the
   // single-row table come from /me/usage/summary, which is scoped to the
@@ -1273,6 +1453,70 @@ async function loadSelf(){
   document.getElementById('kSpendL').textContent='My spend';
   renderRows();
   await loadSelfCharts(ov);
+//MODE:end
+//MODE:standalone
+  const generation=++usageGeneration, requestRange=range;
+  try {
+    // Keep the response local until it passes the staleness and shape
+    // checks: assigning the shared rows first would let a superseded
+    // response leak into the table on the next unrelated render — a sort
+    // click re-renders from the shared rows.
+    const response=await chartJSON('/api/v1/org/usage?range='+requestRange);
+    if(usageGeneration!==generation||range!==requestRange)return;
+    // The standalone org-usage contract is a flat array; anything else is a
+    // failure to report, not an empty table.
+    if(!Array.isArray(response))throw new Error((response&&response.error)||'usage failed');
+    rows=response;
+    renderRows();
+    renderSelfSpend();
+    // This request succeeded where an earlier one may have fallen back to
+    // self-scoped charts (the identity or its org root appeared since).
+    // Track the org-chart mode so the reference selector and later range
+    // changes load charts that match the table.
+    selfCharts=false;
+    await loadCharts();
+  }catch(error){
+    if(usageGeneration!==generation||range!==requestRange)return;
+    if(error instanceof Error&&error.message==='HTTP 403'){
+      // No partner identity: the caller has no org root, so the org endpoints
+      // refuse. The personal usage summary is pinned to the caller on the
+      // server and does not require administrator rights.
+      try{
+        const summary=await chartJSON('/api/v1/me/usage/summary?range='+requestRange+'&ref='+encodeURIComponent(savingsRef));
+        if(usageGeneration!==generation||range!==requestRange)return;
+        if(!summary||!summary.overview)throw new Error((summary&&summary.error)||'usage failed');
+        const ov=summary.overview;
+        rows=[{
+          // Self rows are not drillable: /api/v1/org/person refuses callers
+          // without an org root (the same 403 that triggered this fallback),
+          // so an empty slug keeps the click handler from opening a detail
+          // dialog that can only error.
+          slug:'',
+          full_name:me.display_name||me.user||'',
+          username:me.user||'',
+          is_manager:false,
+          requests:ov.total_requests||0,
+          total_tokens:ov.total_tokens||0,
+          cost_usd:ov.total_cost_usd||0,
+          no_identity:true,
+        }];
+        renderRows();
+        renderSelfSpend();
+      }catch(e){
+        if(usageGeneration!==generation||range!==requestRange)return;
+        document.getElementById('rows').innerHTML='<tr><td colspan="5" class="err">'+esc(e instanceof Error?e.message:String(e))+'</td></tr>';
+      }
+      // The org charts would 403 too; load the personal pies and Saved card.
+	    selfCharts=true;
+      await loadSelfCharts();
+    }else{
+      // A usage-table failure must not wipe the charts: loadCharts reports its
+      // own failures through chartFailure, which preserves the last good data.
+      document.getElementById('rows').innerHTML='<tr><td colspan="5" class="err">'+esc(error instanceof Error?error.message:String(error))+'</td></tr>';
+      await loadCharts();
+    }
+  }
+//MODE:end
 }
 
 // ── Person detail (per-model spend + hosted savings) ──────────────────────
@@ -1282,8 +1526,16 @@ document.getElementById('rows').addEventListener('click',e=>{
   if(r&&r.no_identity)return; // nobody to drill into yet
   openDetail(tr.dataset.slug);
 });
+//MODE:cluster
 function closeDetail(){document.getElementById('det-ov').classList.remove('show');}
+//MODE:end
+//MODE:standalone
+function closeDetail(){detailGeneration++;document.getElementById('det-ov').classList.remove('show');}
+//MODE:end
 async function openDetail(slug){
+//MODE:standalone
+  const generation=++detailGeneration, requestRange=range;
+//MODE:end
   document.getElementById('det-ov').classList.add('show');
   document.getElementById('detName').textContent='…';
   document.getElementById('detWho').textContent='';
@@ -1291,7 +1543,13 @@ async function openDetail(slug){
   document.getElementById('detNote').textContent='';
   ['dSpend','dTokens','dReqs','dSaved','dModels'].forEach(id=>document.getElementById(id).textContent='–');
   try{
+//MODE:cluster
     const d=await (await fetch('/api/v1/org/person?slug='+encodeURIComponent(slug)+'&range='+range)).json();
+//MODE:end
+//MODE:standalone
+    const d=await (await fetch('/api/v1/org/person?slug='+encodeURIComponent(slug)+'&range='+requestRange)).json();
+    if(detailGeneration!==generation||range!==requestRange)return;
+//MODE:end
     if(d.error)throw new Error(d.error);
     document.getElementById('detName').textContent=d.fullName||d.slug;
     document.getElementById('detWho').textContent=(d.usernames||[]).join(', ')||'no gateway identity';
@@ -1323,6 +1581,11 @@ async function openDetail(slug){
       }
     }
   }catch(e){
+//MODE:standalone
+    // A stale failure (superseded dialog or range change) must not
+    // overwrite the newer dialog's content with this error.
+    if(detailGeneration!==generation||range!==requestRange)return;
+//MODE:end
     document.getElementById('detBody').innerHTML='<div class="pm-sub" style="padding:14px 0;color:#f2777a">Could not load detail ('+esc(e.message)+').</div>';
   }
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -119,6 +121,73 @@ func TestClientErrorsAndLogsDoNotLeakResponseBody(t *testing.T) {
 	}
 }
 
+func TestRevokeAPIKeyAcceptsOnly2xx(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		wantErr bool
+	}{
+		{http.StatusContinue, true},
+		{http.StatusOK, false},
+		{http.StatusNoContent, false},
+		{http.StatusMultipleChoices, true},
+		{http.StatusBadRequest, true},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			client := NewClient("http://fixture.invalid", "test-tenant")
+			client.client = &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}
+			err := client.RevokeAPIKey(context.Background(), "key-1", []string{"team-a"})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error=%v; want error=%v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestRevokeAllUserAPIKeysAcceptsOnly2xx(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		body      string
+		wantErr   bool
+		wantN     int
+		wantKnown bool
+	}{
+		{http.StatusContinue, "", true, 0, false},
+		{http.StatusOK, `{"revokedCount":2}`, false, 2, true},
+		{http.StatusOK, `{}`, false, 0, false},
+		{http.StatusOK, `{"revokedCount":null}`, false, 0, false},
+		{http.StatusOK, `{"revokedCount":-1}`, true, 0, false},
+		{http.StatusAccepted, `{"revokedCount":3}`, false, 3, true},
+		{http.StatusNoContent, "", false, 0, false},
+		{http.StatusMultipleChoices, "", true, 0, false},
+		{http.StatusBadRequest, "", true, 0, false},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			client := NewClient("http://fixture.invalid", "test-tenant")
+			client.client = &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			})}
+			n, known, err := client.RevokeAllUserAPIKeys(context.Background(), "alice", "team-a", false)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error=%v; want error=%v", err, tc.wantErr)
+			}
+			if !tc.wantErr && n != tc.wantN {
+				t.Fatalf("count=%d; want %d", n, tc.wantN)
+			}
+			if !tc.wantErr && known != tc.wantKnown {
+				t.Fatalf("known=%v; want %v", known, tc.wantKnown)
+			}
+		})
+	}
+}
+
 func TestCreateAPIKeyCompletesKnownMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/api-keys" {
@@ -165,5 +234,20 @@ func TestCreateAPIKeyPreservesMetadataReturnedByMaaS(t *testing.T) {
 	}
 	if key.Username != "canonical@example.com" || key.Tenant != "canonical-tenant" || key.Status != "pending" {
 		t.Fatalf("MaaS metadata was overwritten: %#v", key)
+	}
+}
+
+func TestCreateUserAPIKeyRejectsJSONRedirects(t *testing.T) {
+	for _, status := range []int{300, 301, 302, 307, 308} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			c := NewClient("http://fixture.invalid", "")
+			c.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			})}
+			key, err := c.CreateUserAPIKey(context.Background(), "alice", "users", CreateKeyRequest{Name: "test"})
+			if err == nil || key != nil {
+				t.Fatalf("redirect accepted: key=%+v err=%v", key, err)
+			}
+		})
 	}
 }

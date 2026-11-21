@@ -113,15 +113,20 @@ type Store struct {
 	// quotaCacheTTL; see QuotaDecisionCached. Guarded by quotaMu.
 	quotaMu           sync.Mutex
 	quotaCache        map[string]quotaCacheEntry
+	quotaGen          uint64
 	quotaEnforcement  atomic.Bool
 	monthSpendEnabled atomic.Bool
 	monthSpendWrites  atomic.Bool
 
 	// zeroCostMu memoises the global zero-price model list. The list changes
 	// only when pricing changes, but every quota cache miss consults it.
+	// zeroCostEpoch bumps on every committed rate change so a reader whose
+	// query started before the commit cannot memoize its pre-commit answer
+	// after the reset (see SetManagedPrice).
 	zeroCostMu      sync.RWMutex
 	zeroCostModels  []string
 	zeroCostExpires time.Time
+	zeroCostEpoch   uint64
 
 	// QoS classification state. The cached decisions are process-local,
 	// like the quota cache; the short-window and 5m-guard caches have
@@ -297,7 +302,7 @@ var insertEventSQL = fmt.Sprintf(`
 		$15::text AS user_agent, $16::int AS status_code) e
 	LEFT JOIN model_pricing p ON p.model = e.model
 	ON CONFLICT DO NOTHING
-	RETURNING cost_usd`, costUSDExpr)
+	RETURNING cost_usd`, currentPriceUSDExpr)
 
 // upsertMonthSpendSQL maintains the exact month-to-date accumulator in the
 // same transaction as the ledger insert. The caller only executes this after
@@ -421,10 +426,13 @@ type ModelUsage struct {
 //
 // Requires usage_events aliased as `e` and model_pricing as `p`. See
 // perRequestCostUSD in postgres_test.go for the executable reference model.
-const costUSDExpr = `GREATEST(e.prompt_tokens - COALESCE(e.cached_input_tokens, 0) - COALESCE(e.cache_creation_tokens, 0), 0) * COALESCE(p.input_cost_per_mtok, 15)/1000000.0 +
+const currentPriceUSDExpr = `GREATEST(e.prompt_tokens - COALESCE(e.cached_input_tokens, 0) - COALESCE(e.cache_creation_tokens, 0), 0) * COALESCE(p.input_cost_per_mtok, 15)/1000000.0 +
 			COALESCE(e.cached_input_tokens, 0) * COALESCE(p.cache_read_cost_per_mtok, 0.5)/1000000.0 +
 			COALESCE(e.cache_creation_tokens, 0) * COALESCE(p.cache_write_cost_per_mtok, 18.75)/1000000.0 +
 			e.completion_tokens * COALESCE(p.output_cost_per_mtok, 75)/1000000.0`
+
+// Reads retain event-time charges; missing legacy values use the current estimate.
+const costUSDExpr = `COALESCE(e.cost_usd, (` + currentPriceUSDExpr + `))`
 
 // listCostUSDExpr mirrors costUSDExpr but prices each term at the vendor
 // list rate (model_pricing.list_*), with a two-tier fallback per term:
@@ -1879,6 +1887,7 @@ var migrations = []string{
 		list_cache_write_cost_per_mtok NUMERIC(10,4) NOT NULL DEFAULT 0,
 		list_cache_read_cost_per_mtok NUMERIC(10,4) NOT NULL DEFAULT 0
 	)`,
+	`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS managed_rate BOOLEAN NOT NULL DEFAULT false`,
 	`CREATE TABLE IF NOT EXISTS pricing_discount_policy (
 		id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
 		version TEXT NOT NULL,
@@ -1998,9 +2007,24 @@ func (s *Store) SeedPricing(ctx context.Context, prices []ModelPrice) (int, erro
 	}
 	defer tx.Rollback()
 
+	// Freeze legacy ledger rows before changing the rates used by their
+	// fallback calculation. New events already persist cost_usd at ingestion.
+	// The outer WHERE rechecks cost_usd IS NULL: under READ COMMITTED a
+	// concurrent repricing can commit a cost for one of these rows after the
+	// subquery's snapshot, and this update must not overwrite that value.
+	if len(prices) > 0 {
+		models := make([]string, 0, len(prices))
+		for _, price := range prices {
+			models = append(models, price.Model)
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE usage_events u SET cost_usd=q.cost FROM (SELECT e.id,%s AS cost FROM usage_events e LEFT JOIN model_pricing p ON p.model=e.model WHERE e.model=ANY($1) AND e.cost_usd IS NULL) q WHERE u.id=q.id AND u.cost_usd IS NULL`, currentPriceUSDExpr), pq.Array(models)); err != nil {
+			return 0, fmt.Errorf("preserve legacy charges: %w", err)
+		}
+	}
+
 	updated := 0
 	for _, p := range prices {
-		_, err := tx.ExecContext(ctx, `
+		result, err := tx.ExecContext(ctx, `
 			INSERT INTO model_pricing (model, provider, input_cost_per_mtok, output_cost_per_mtok, cache_write_cost_per_mtok, cache_read_cost_per_mtok, deprecated)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (model) DO UPDATE SET
@@ -2009,17 +2033,32 @@ func (s *Store) SeedPricing(ctx context.Context, prices []ModelPrice) (int, erro
 				output_cost_per_mtok = EXCLUDED.output_cost_per_mtok,
 				cache_write_cost_per_mtok = EXCLUDED.cache_write_cost_per_mtok,
 				cache_read_cost_per_mtok = EXCLUDED.cache_read_cost_per_mtok,
-				deprecated = EXCLUDED.deprecated`,
+				deprecated = EXCLUDED.deprecated
+ WHERE NOT model_pricing.managed_rate`,
 			p.Model, p.Provider, p.InputCost, p.OutputCost, p.CacheWriteCost, p.CacheReadCost, p.Deprecated)
 		if err != nil {
 			return 0, fmt.Errorf("upsert %s: %w", p.Model, err)
 		}
-		updated++
+		count, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		updated += int(count)
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit transaction: %w", err)
 	}
+	// The seed changed model rates: a model that just went from free to paid
+	// must stop being served as zero-cost, and the quota cache may hold a
+	// decision computed against the old rates. Mirror SetManagedPrice so an
+	// import cannot leave stale free-model or decision state behind.
+	s.zeroCostMu.Lock()
+	s.zeroCostModels = nil
+	s.zeroCostExpires = time.Time{}
+	s.zeroCostEpoch++
+	s.zeroCostMu.Unlock()
+	s.invalidateQuotaCache()
 	return updated, nil
 }
 
@@ -2068,6 +2107,7 @@ func (s *Store) SeedListPricing(ctx context.Context, prices []ModelPrice) (int, 
 // price seeded" — the cost query's NULLIF fallback treats 0 as absent and
 // falls back to the effective gateway rate, so saved_usd is exactly 0.
 type ModelPrice struct {
+	Managed            bool // Explicit service-managed rate; imports must not replace it.
 	Model              string
 	Provider           string
 	InputCost          float64
@@ -2128,7 +2168,7 @@ func (s *Store) GetPricingCatalog(ctx context.Context, usedOnly bool) ([]ModelPr
 }
 
 func (s *Store) GetCurrentPricing(ctx context.Context) ([]ModelPrice, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT model, provider, input_cost_per_mtok, output_cost_per_mtok, cache_write_cost_per_mtok, cache_read_cost_per_mtok FROM model_pricing ORDER BY model`)
+	rows, err := s.db.QueryContext(ctx, `SELECT model, provider, input_cost_per_mtok, output_cost_per_mtok, cache_write_cost_per_mtok, cache_read_cost_per_mtok, managed_rate FROM model_pricing ORDER BY model`)
 	if err != nil {
 		return nil, err
 	}
@@ -2137,10 +2177,10 @@ func (s *Store) GetCurrentPricing(ctx context.Context) ([]ModelPrice, error) {
 	var prices []ModelPrice
 	for rows.Next() {
 		var p ModelPrice
-		if err := rows.Scan(&p.Model, &p.Provider, &p.InputCost, &p.OutputCost, &p.CacheWriteCost, &p.CacheReadCost); err != nil {
+		if err := rows.Scan(&p.Model, &p.Provider, &p.InputCost, &p.OutputCost, &p.CacheWriteCost, &p.CacheReadCost, &p.Managed); err != nil {
 			return nil, err
 		}
 		prices = append(prices, p)
 	}
-	return prices, nil
+	return prices, rows.Err()
 }

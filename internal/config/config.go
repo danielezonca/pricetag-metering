@@ -8,6 +8,8 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -74,8 +76,40 @@ func parseMeteringModeOrRaw(raw string) MeteringMode {
 	return mode
 }
 
+// DeploymentMode separates the deployment contract from optional API
+// credentials. Cluster remains the default so setting a management secret
+// cannot silently change authentication, entitlement, or UI behavior.
+type DeploymentMode string
+
+const (
+	DeploymentModeCluster    DeploymentMode = "cluster"
+	DeploymentModeStandalone DeploymentMode = "standalone"
+)
+
+// ParseDeploymentMode validates DEPLOYMENT_MODE. Empty means cluster.
+func ParseDeploymentMode(raw string) (DeploymentMode, error) {
+	switch DeploymentMode(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", DeploymentModeCluster:
+		return DeploymentModeCluster, nil
+	case DeploymentModeStandalone:
+		return DeploymentModeStandalone, nil
+	default:
+		return "", fmt.Errorf("DEPLOYMENT_MODE %q is invalid (want cluster or standalone)", raw)
+	}
+}
+
 // Config is the resolved runtime configuration.
 type Config struct {
+	// DeploymentMode owns behavior that differs between the cluster and
+	// standalone products. ManagementAPISecret authenticates standalone
+	// management routes and is ignored in cluster mode.
+	DeploymentMode DeploymentMode
+	// Standalone management is opt-in and uses a dedicated operator credential.
+	ManagementAPISecret    string
+	ManagementPublicOrigin string
+	GatewayModelsFile      string
+	MaaSAPITLS             MaaSAPITLS
+
 	// DatabaseURL is the PostgreSQL connection string. Required.
 	DatabaseURL string
 
@@ -277,6 +311,20 @@ type Config struct {
 	KeyPolicy  KeyPolicy
 }
 
+// MaaSAPITLS configures verification for the internal MaaS API client.
+type MaaSAPITLS struct {
+	CAFile             string
+	InsecureSkipVerify bool
+	FollowRedirects    bool
+	StrictKeyList      bool
+}
+
+// StandaloneManagement reports whether standalone-specific auth, entitlement,
+// and UI behavior is enabled.
+func (c Config) StandaloneManagement() bool {
+	return c.DeploymentMode == DeploymentModeStandalone
+}
+
 // KeyPolicy controls the lifetime of self-service API keys created from the
 // personal API Keys tab.
 type KeyPolicy struct {
@@ -418,11 +466,27 @@ func Load() Config {
 		overlayConfigMaps = []string{"praxis-routing-openai", "praxis-routing-unified"}
 	}
 
+	deploymentMode := parseDeploymentModeOrRaw(os.Getenv("DEPLOYMENT_MODE"))
+	maasInsecureSkipVerify := deploymentMode == DeploymentModeCluster
+	maasCAFile := os.Getenv("MAAS_API_CA_FILE")
+	if raw := os.Getenv("MAAS_API_INSECURE_SKIP_VERIFY"); strings.TrimSpace(raw) != "" {
+		maasInsecureSkipVerify = envBool("MAAS_API_INSECURE_SKIP_VERIFY", false)
+	} else if maasCAFile != "" {
+		maasInsecureSkipVerify = false
+	}
+
 	return Config{
-		DatabaseURL:       os.Getenv("DATABASE_URL"),
-		Port:              envDefault("PORT", "8080"),
-		MetricsPort:       envDefault("METRICS_PORT", "9902"),
-		MeteringMode:      parseMeteringModeOrRaw(os.Getenv("METERING_MODE")),
+		DatabaseURL:    os.Getenv("DATABASE_URL"),
+		DeploymentMode: deploymentMode,
+		Port:           envDefault("PORT", "8080"),
+		MetricsPort:    envDefault("METRICS_PORT", "9902"),
+		MeteringMode:   parseMeteringModeOrRaw(os.Getenv("METERING_MODE")),
+		MaaSAPITLS: MaaSAPITLS{
+			CAFile:             maasCAFile,
+			InsecureSkipVerify: maasInsecureSkipVerify,
+			FollowRedirects:    deploymentMode == DeploymentModeCluster,
+			StrictKeyList:      deploymentMode == DeploymentModeStandalone,
+		},
 		MonthlyTokenQuota: envFloatAllowNonPositive("MONTHLY_TOKEN_QUOTA", DefaultMonthlyTokenQuota),
 		// The $600 safety net is on by default. Operators can still use the
 		// environment as a deployment-level kill switch while the policy's
@@ -430,6 +494,9 @@ func Load() Config {
 		QuotaEnforcementEnabled:  envBool("QUOTA_ENFORCEMENT_ENABLED", true),
 		ModelAccessEnforcement:   envDefault("MODEL_ACCESS_ENFORCEMENT", "off"),
 		DBMaxOpenConns:           envInt("DB_MAX_OPEN_CONNS", 50),
+		ManagementAPISecret:      os.Getenv("MANAGEMENT_API_SECRET"),
+		ManagementPublicOrigin:   normalizePublicOrigin(os.Getenv("MANAGEMENT_PUBLIC_ORIGIN")),
+		GatewayModelsFile:        os.Getenv("GATEWAY_MODELS_FILE"),
 		DBMaxIdleConns:           envInt("DB_MAX_IDLE_CONNS", 10),
 		DBConnMaxLifetimeSeconds: envInt("DB_CONN_MAX_LIFETIME_SECONDS", 14400),
 		EventSource:              envDefault("EVENT_SOURCE", "ai-gateway"),
@@ -538,18 +605,139 @@ func Load() Config {
 	}
 }
 
+func parseDeploymentModeOrRaw(raw string) DeploymentMode {
+	mode, err := ParseDeploymentMode(raw)
+	if err != nil {
+		return DeploymentMode(strings.ToLower(strings.TrimSpace(raw)))
+	}
+	return mode
+}
+
 // Validate rejects enum-valued settings that Load keeps raw so a typo fails
 // startup instead of silently running the wrong workload.
 func (c Config) Validate() error {
 	if _, err := ParseMeteringMode(string(c.MeteringMode)); err != nil {
 		return err
 	}
+	if _, err := ParseDeploymentMode(string(c.DeploymentMode)); err != nil {
+		return err
+	}
+	if c.MaaSAPITLS.InsecureSkipVerify && c.MaaSAPITLS.CAFile != "" {
+		return fmt.Errorf("MAAS_API_CA_FILE and MAAS_API_INSECURE_SKIP_VERIFY are mutually exclusive")
+	}
+	// Fail startup on an unreadable CA bundle: the clients that consume it
+	// would otherwise boot with diverging TLS behavior (the key client exits,
+	// the login validator degrades) instead of one clear configuration error.
+	if c.MaaSAPITLS.CAFile != "" {
+		if _, err := os.ReadFile(c.MaaSAPITLS.CAFile); err != nil {
+			return fmt.Errorf("MAAS_API_CA_FILE %q cannot be read: %w", c.MaaSAPITLS.CAFile, err)
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(c.ModelAccessEnforcement)) {
 	case "", "off", "observe", "enforce":
 	default:
 		return fmt.Errorf("MODEL_ACCESS_ENFORCEMENT must be off, observe, or enforce, got %q", c.ModelAccessEnforcement)
 	}
+	// Standalone login and management endpoints compare browser Origin
+	// headers against this value; require a bare absolute http(s) origin so a
+	// value that no browser would ever send fails at startup instead of
+	// rejecting every login at runtime.
+	if c.StandaloneManagement() {
+		// The management middleware answers 503 for every management route
+		// when the secret is empty, so a secret-less standalone deployment
+		// would start up with its whole account API unusable. Fail at
+		// startup instead.
+		if c.ManagementAPISecret == "" {
+			return fmt.Errorf("MANAGEMENT_API_SECRET is required in standalone mode")
+		}
+		// The management middleware compares bearer tokens byte for byte, so
+		// a secret with surrounding whitespace — a trailing newline from a
+		// file or kubectl is the usual cause — would reject every request
+		// while looking correctly configured. Fail at startup instead.
+		if c.ManagementAPISecret != strings.TrimSpace(c.ManagementAPISecret) {
+			return fmt.Errorf("MANAGEMENT_API_SECRET must not contain leading or trailing whitespace")
+		}
+		origin, err := url.Parse(c.ManagementPublicOrigin)
+		if err != nil || (origin.Scheme != "http" && origin.Scheme != "https") ||
+			origin.Host == "" || origin.User != nil ||
+			origin.Path != "" || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" {
+			return fmt.Errorf("MANAGEMENT_PUBLIC_ORIGIN must be an absolute http(s) origin (scheme://host[:port], no path or query) in standalone mode")
+		}
+		// A numeric dotted host that is not a canonical IP (for example IPv4
+		// shorthand like 127.1) survives normalization, but browsers resolve
+		// and serialize it in dotted-quad form (127.0.0.1), so the exact
+		// Origin comparison would reject every login. Fail at startup instead.
+		if host := origin.Hostname(); host != "" && strings.Contains(host, ".") && strings.Trim(host, "0123456789.") == "" {
+			if _, err := netip.ParseAddr(host); err != nil {
+				return fmt.Errorf("MANAGEMENT_PUBLIC_ORIGIN host %q is not a canonical IP address; use dotted-quad form (for example 127.0.0.1)", host)
+			}
+		}
+		// Browsers punycode-encode internationalized domains, so an Origin
+		// header never carries the Unicode spelling: reject it at startup
+		// with a pointer to the xn-- form instead of failing every login.
+		if strings.ContainsFunc(origin.Host, func(r rune) bool { return r > 127 }) {
+			return fmt.Errorf("MANAGEMENT_PUBLIC_ORIGIN host must be ASCII; use the punycode (xn--) form for internationalized domains")
+		}
+	} else if c.ManagementAPISecret != "" {
+		// Management routes only exist in standalone mode, and the secret
+		// does nothing in cluster mode. Rejecting the combination catches a
+		// standalone-style deployment that forgot DEPLOYMENT_MODE=standalone
+		// before it boots with a management API that 404s.
+		return fmt.Errorf("MANAGEMENT_API_SECRET is only used in standalone mode; set DEPLOYMENT_MODE=standalone or unset the secret")
+	}
 	return nil
+}
+
+// normalizePublicOrigin matches how browsers serialize an Origin header:
+// no surrounding whitespace or trailing slash, and no explicit default
+// port (https://host:443 is sent as https://host). Path, query, and
+// fragment are left for Validate to reject.
+func normalizePublicOrigin(raw string) string {
+	value := strings.TrimRight(strings.TrimSpace(raw), "/")
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return value
+	}
+	// Browsers serialize Origin with a lowercase scheme and host, and
+	// url.Parse already lowercases the scheme: a cased host must be
+	// lowercased too, or the exact-match comparison silently rejects every
+	// browser request. IPv6 literals are additionally compressed to the
+	// RFC 5952 form the browser's URL parser emits, so an uncompressed or
+	// cased literal in the configuration still matches.
+	if host := parsed.Hostname(); host != "" {
+		if addr, addrErr := netip.ParseAddr(host); addrErr == nil {
+			host = addr.String()
+		} else {
+			host = strings.ToLower(host)
+		}
+		// An internationalized host cannot be normalized to what browsers
+		// send: they punycode it (xn--…), while url.String() would
+		// percent-encode this spelling into a form no browser ever sends.
+		// Leave it for Validate to reject with a pointer to the punycode
+		// form.
+		if strings.ContainsFunc(host, func(r rune) bool { return r > 127 }) {
+			return value
+		}
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		// Browsers parse the port as a number and re-serialize it without
+		// leading zeros before dropping scheme defaults, so https://host:0443
+		// is sent as https://host. Compare numerically and re-emit nondefault
+		// ports in canonical decimal form, or a padded port in the
+		// configuration would silently reject every browser request.
+		if port := parsed.Port(); port != "" {
+			if portNum, portErr := strconv.Atoi(port); portErr == nil {
+				if !((parsed.Scheme == "https" && portNum == 443) || (parsed.Scheme == "http" && portNum == 80)) {
+					host += ":" + strconv.Itoa(portNum)
+				}
+			} else {
+				host += ":" + port
+			}
+		}
+		parsed.Host = host
+	}
+	return parsed.String()
 }
 
 func envDefault(key, fallback string) string {
