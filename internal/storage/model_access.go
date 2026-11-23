@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // DefaultTenantID is the stable ID of the single tenant used by v1. The
@@ -59,8 +60,15 @@ type EffectiveModelAccess struct {
 	DirectModels       []string             `json:"direct_models,omitempty"`
 	RestrictionEnabled bool                 `json:"restriction_enabled"`
 	RestrictionModels  []string             `json:"restriction_models,omitempty"`
-	EffectiveModels    []string             `json:"effective_models"`
-	PolicyVersion      int64                `json:"policy_version"`
+	// LegacyAllowlistEnabled reports that the AI Budget Help (v1) per-user
+	// allowlist is layered on top of the role policy for this subject.
+	// LegacyAllowlistModels is its exact-match list; EffectiveModels is
+	// already intersected with it. Deny-overrides: the allowlist can narrow
+	// the v2 set, never widen it.
+	LegacyAllowlistEnabled bool     `json:"legacy_allowlist_enabled"`
+	LegacyAllowlistModels  []string `json:"legacy_allowlist_models,omitempty"`
+	EffectiveModels        []string `json:"effective_models"`
+	PolicyVersion          int64    `json:"policy_version"`
 }
 
 func (s *Store) migrateModelAccess(ctx context.Context) error {
@@ -468,14 +476,22 @@ func (s *Store) GetEffectiveModelAccess(ctx context.Context, tenantID, subjectID
 	}
 
 	var subjectStatus string
-	var partnerActive sql.NullBool
+	var partnerActive, revocationPending sql.NullBool
+	var allowlistPresent bool
+	var allowlistModels []string
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT ps.principal_type, ps.status,
 		       CASE
 		         WHEN ps.principal_type <> 'partner_user' THEN NULL
 		         WHEN pu.user_id IS NULL THEN FALSE
 		         ELSE pu.active
-		       END
+		       END,
+		       CASE
+		         WHEN ps.principal_type <> 'partner_user' THEN NULL
+		         ELSE pu.key_revocation_pending
+		       END,
+		       allowlist.user_id IS NOT NULL,
+		       allowlist.models
 		FROM policy_subjects ps
 		LEFT JOIN partner_users pu
 		  ON ps.principal_type = 'partner_user'
@@ -483,8 +499,12 @@ func (s *Store) GetEffectiveModelAccess(ctx context.Context, tenantID, subjectID
 		       WHEN ps.external_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 		       THEN ps.external_id::uuid
 		     END
+		LEFT JOIN partner_user_model_allowlists allowlist
+		  ON ps.principal_type = 'partner_user'
+		 AND allowlist.user_id = pu.user_id
 		WHERE ps.tenant_id = $1 AND ps.subject_id = $2`, tenantID, subjectID).
-		Scan(&result.PrincipalType, &subjectStatus, &partnerActive); err != nil {
+		Scan(&result.PrincipalType, &subjectStatus, &partnerActive,
+			&revocationPending, &allowlistPresent, pq.Array(&allowlistModels)); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return result, ErrModelAccessSubjectNotFound
 		}
@@ -510,6 +530,10 @@ func (s *Store) GetEffectiveModelAccess(ctx context.Context, tenantID, subjectID
 	}
 
 	if superAdmin {
+		// Explicit break-glass only. No production caller passes true: the
+		// entitlement and decision paths both pass false so inference access is
+		// role-governed. This return intentionally skips the legacy AIBH
+		// allowlist below; a future caller that passes true would bypass it.
 		result.SuperAdmin = true
 		result.Unrestricted = true
 		result.EffectiveModels = nil
@@ -581,6 +605,35 @@ func (s *Store) GetEffectiveModelAccess(ctx context.Context, tenantID, subjectID
 	} else {
 		result.EffectiveModels = base
 	}
+
+	// AI Budget Help still drives the legacy per-user allowlist through the v1
+	// partner API. Once MODEL_ACCESS_ENFORCEMENT=enforce, this resolver answers
+	// the entitlement and decision paths, so without this step an AIBH set or
+	// clear would be silently ignored. Apply the allowlist here as one more
+	// deny-overrides restriction: a set narrows the v2 set, a clear restores it,
+	// and AIBH can never widen beyond what roles and grants allow. Keeping it in
+	// the resolver makes the entitlement endpoint, /api/v2/policy/decide and the
+	// admin effective-access view agree on the answer.
+	//
+	// The subject row above already carries the allowlist (LEFT JOIN), so this
+	// adds no extra round trips to the per-request entitlement path. A row with
+	// an empty list is AIBH's explicit block-all contract, distinct from a
+	// missing row, which clears the restriction. A pending key revocation fails
+	// closed, matching GetPartnerUserModelAllowlist and the legacy entitlement
+	// endpoint this resolver replaced.
+	if result.PrincipalType == PrincipalPartnerUser {
+		switch {
+		case revocationPending.Valid && revocationPending.Bool:
+			result.LegacyAllowlistEnabled = true
+			result.LegacyAllowlistModels = []string{}
+			result.EffectiveModels = []string{}
+		case allowlistPresent:
+			result.LegacyAllowlistEnabled = true
+			result.LegacyAllowlistModels = allowlistModels
+			result.EffectiveModels = intersectModels(result.EffectiveModels, allowlistModels)
+		}
+	}
+
 	if result.EffectiveModels == nil {
 		result.EffectiveModels = []string{}
 	}
